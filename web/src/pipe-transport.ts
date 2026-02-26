@@ -23,7 +23,8 @@ const DEBUG = typeof localStorage !== "undefined" && localStorage.getItem("pipe:
 function log(dir: string, summary: string, detail?: unknown) {
   if (!DEBUG) return;
   const ts = new Date().toISOString().slice(11, 23);
-  if (detail !== undefined) console.log(`%c[pipe:ui ${ts}] ${dir} ${summary}`, "color:#7af", detail);
+  if (detail !== undefined)
+    console.log(`%c[pipe:ui ${ts}] ${dir} ${summary}`, "color:#7af", detail);
   else console.log(`%c[pipe:ui ${ts}] ${dir} ${summary}`, "color:#7af");
 }
 

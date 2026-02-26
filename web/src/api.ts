@@ -105,6 +105,10 @@ export function getEvents(limit = 100, offset = 0): Promise<AppEvent[]> {
   });
 }
 
+export function pickFolder(): Promise<{ folder: string }> {
+  return transport.get("/api/pick-folder");
+}
+
 export function shutdown(): Promise<void> {
   return transport.post("/api/shutdown");
 }

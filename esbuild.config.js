@@ -1,6 +1,6 @@
-import { build } from "esbuild";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { build } from "esbuild";
 
 // Build lib — two steps so everything outputs flat into lib/ (not lib/lib/).
 // Pear's module resolver can't find node_modules from nested subdirs.
@@ -43,7 +43,10 @@ const nodeToBareMappings = [
   // Default import from CJS bare-fs gives a mutable object (needed for watch patching).
   // These must run before the generic node:module / node:fs replacements below.
   ['import { createRequire } from "node:module";\n', 'import mutableFs from "bare-fs";\n'],
-  ['const require2 = createRequire(import.meta.url);\nconst mutableFs = require2("node:fs");\n', ''],
+  [
+    'const require2 = createRequire(import.meta.url);\nconst mutableFs = require2("node:fs");\n',
+    "",
+  ],
   // Static ESM imports: node:* → bare-* npm packages
   ['"node:crypto"', '"bare-crypto"'],
   ['"node:events"', '"bare-events"'],

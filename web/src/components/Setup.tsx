@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { createInvite, previewSetup, type SetupPreviewResponse, setup } from "../api";
+import { useState } from "react";
+import { createInvite, pickFolder, previewSetup, type SetupPreviewResponse, setup } from "../api";
 import { runtime } from "../runtime";
 import styles from "./Setup.module.css";
 
@@ -20,32 +20,13 @@ export function Setup({ onComplete }: SetupProps) {
   const [copied, setCopied] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [preview, setPreview] = useState<SetupPreviewResponse | null>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
-
-  const handleBrowse = () => {
-    folderInputRef.current?.click();
-  };
-
-  const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    // In Pear/Electron, File objects have a .path property with the absolute path.
-    const firstFile = files[0] as File & { path?: string };
-    if (firstFile.path) {
-      const absolutePath = firstFile.path;
-      const relativePath = firstFile.webkitRelativePath;
-      // webkitRelativePath is "folderName/sub/file.txt" — strip this suffix
-      // from the absolute path to get the folder's parent, then append the folder name.
-      if (relativePath && absolutePath.endsWith(relativePath)) {
-        setFolder(absolutePath.slice(0, -relativePath.length + relativePath.indexOf("/")));
-      } else {
-        // Fallback: strip the filename to get the containing directory
-        const sep = absolutePath.lastIndexOf("/");
-        if (sep > 0) setFolder(absolutePath.substring(0, sep));
-      }
+  const handleBrowse = async () => {
+    try {
+      const { folder: picked } = await pickFolder();
+      setFolder(picked);
+    } catch {
+      // User cancelled the dialog — ignore
     }
-    // Clear so re-selecting the same folder fires onChange again
-    e.target.value = "";
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -154,19 +135,9 @@ export function Setup({ onComplete }: SetupProps) {
               placeholder="~/PearSync"
             />
             {runtime.canPickFolder && (
-              <>
-                <button type="button" className={styles.browseBtn} onClick={handleBrowse}>
-                  Browse
-                </button>
-                <input
-                  ref={folderInputRef}
-                  type="file"
-                  // @ts-expect-error webkitdirectory is not in React's type definitions
-                  webkitdirectory=""
-                  style={{ display: "none" }}
-                  onChange={handleFolderSelect}
-                />
-              </>
+              <button type="button" className={styles.browseBtn} onClick={handleBrowse}>
+                Browse
+              </button>
             )}
           </div>
 

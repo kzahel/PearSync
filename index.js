@@ -1,6 +1,8 @@
 /** @typedef {import('pear-interface')} */
 import Runtime from 'pear-electron'
 import Bridge from 'pear-bridge'
+import { spawn as spawnProcess } from 'bare-subprocess'
+import os from 'bare-os'
 import { startEngine, resolveFolder, startupConflictPolicies } from './lib/engine-manager.js'
 import { EngineBridge } from './lib/engine-bridge.js'
 
@@ -146,5 +148,45 @@ async function handleRequest (method, path, body, query) {
     return { ok: true }
   }
 
+  if (method === 'get' && path === '/api/pick-folder') {
+    return pickFolder()
+  }
+
   throw new Error(`Unknown route: ${method} ${path}`)
+}
+
+function pickFolder () {
+  const platform = os.platform()
+  let cmd, args
+  if (platform === 'darwin') {
+    cmd = 'osascript'
+    args = ['-e', 'POSIX path of (choose folder with prompt "Select folder to sync")']
+  } else if (platform === 'win32') {
+    cmd = 'powershell'
+    args = ['-NoProfile', '-Command',
+      'Add-Type -AssemblyName System.Windows.Forms; ' +
+      '$d = New-Object System.Windows.Forms.FolderBrowserDialog; ' +
+      '$d.Description = "Select folder to sync"; ' +
+      'if ($d.ShowDialog() -eq "OK") { $d.SelectedPath } else { exit 1 }'
+    ]
+  } else {
+    // Linux — try zenity first, fall back to kdialog
+    cmd = 'zenity'
+    args = ['--file-selection', '--directory', '--title=Select folder to sync']
+  }
+
+  return new Promise((resolve, reject) => {
+    const proc = spawnProcess(cmd, args)
+    let stdout = ''
+    proc.stdout.on('data', (data) => { stdout += Buffer.from(data).toString() })
+    proc.on('exit', (code) => {
+      if (code !== 0) {
+        reject(new Error('Folder selection cancelled'))
+        return
+      }
+      let folder = stdout.trim()
+      if (folder.endsWith('/') || folder.endsWith('\\')) folder = folder.slice(0, -1)
+      resolve({ folder })
+    })
+  })
 }
