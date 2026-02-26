@@ -33,11 +33,15 @@ pipe.on('data', async (data) => {
   let request
   try {
     request = JSON.parse(Buffer.from(data).toString())
-  } catch {
+  } catch (err) {
+    console.error('[pipe] malformed JSON:', err)
     return
   }
 
-  if (!request.id) return
+  if (!request.id) {
+    console.warn('[pipe] message missing id:', request)
+    return
+  }
 
   const { id, method, params } = request
   const { path, body, query } = params || {}
@@ -46,6 +50,7 @@ pipe.on('data', async (data) => {
     const result = await handleRequest(method, path, body, query)
     pipe.write(JSON.stringify({ id, result }))
   } catch (err) {
+    console.error(`[pipe] ${method} ${path} error:`, err)
     pipe.write(JSON.stringify({ id, error: String(err) }))
   }
 })
@@ -99,7 +104,9 @@ async function handleRequest (method, path, body, query) {
   }
 
   if (method === 'post' && path === '/api/shutdown') {
-    setImmediate(async () => {
+    // Schedule teardown after the response has flushed through the pipe.
+    // setTimeout(0) lets the caller's pipe.write() complete first.
+    setTimeout(async () => {
       if (removePushListener) removePushListener()
       if (engineBridge) engineBridge.detach()
       if (engine) {
@@ -108,7 +115,7 @@ async function handleRequest (method, path, body, query) {
       }
       if (store) await store.close()
       Pear.exit()
-    })
+    }, 50)
     return { ok: true }
   }
 

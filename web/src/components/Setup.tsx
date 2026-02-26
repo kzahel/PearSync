@@ -32,16 +32,20 @@ export function Setup({ onComplete }: SetupProps) {
     // In Pear/Electron, File objects have a .path property with the absolute path.
     const firstFile = files[0] as File & { path?: string };
     if (firstFile.path) {
-      const relativePath = firstFile.webkitRelativePath;
-      const folderName = relativePath.split("/")[0];
       const absolutePath = firstFile.path;
-      const idx = absolutePath.lastIndexOf(folderName);
-      if (idx >= 0) {
-        setFolder(absolutePath.substring(0, idx + folderName.length));
+      const relativePath = firstFile.webkitRelativePath;
+      // webkitRelativePath is "folderName/sub/file.txt" — strip this suffix
+      // from the absolute path to get the folder's parent, then append the folder name.
+      if (relativePath && absolutePath.endsWith(relativePath)) {
+        setFolder(absolutePath.slice(0, -relativePath.length + relativePath.indexOf("/")));
       } else {
-        setFolder(absolutePath.substring(0, absolutePath.lastIndexOf("/")));
+        // Fallback: strip the filename to get the containing directory
+        const sep = absolutePath.lastIndexOf("/");
+        if (sep > 0) setFolder(absolutePath.substring(0, sep));
       }
     }
+    // Clear so re-selecting the same folder fires onChange again
+    e.target.value = "";
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

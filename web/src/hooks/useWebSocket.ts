@@ -47,6 +47,10 @@ export function useWebSocket(onMessage: (msg: WsMessage) => void) {
         }
       };
 
+      ws.onerror = (event) => {
+        console.error("[ws] connection error:", event);
+      };
+
       ws.onclose = () => {
         if (stopped) return;
         reconnectTimer = setTimeout(() => {

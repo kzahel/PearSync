@@ -18,10 +18,15 @@ interface PipeResponse {
 export type PushCallback = (msg: { type: string; payload: unknown; timestamp: number }) => void;
 
 export class PipeTransport implements Transport {
+  private static REQUEST_TIMEOUT_MS = 30_000;
   private nextId = 1;
   private pending = new Map<
     number,
-    { resolve: (v: unknown) => void; reject: (e: Error) => void }
+    {
+      resolve: (v: unknown) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
   >();
   private pushListeners = new Set<PushCallback>();
 
@@ -42,6 +47,7 @@ export class PipeTransport implements Transport {
       if (msg.id !== undefined) {
         const pending = this.pending.get(msg.id);
         if (pending) {
+          clearTimeout(pending.timer);
           this.pending.delete(msg.id);
           if (msg.error) {
             pending.reject(new Error(msg.error));
@@ -51,7 +57,7 @@ export class PipeTransport implements Transport {
         }
       } else if (msg.type) {
         for (const fn of this.pushListeners) {
-          fn({ type: msg.type, payload: msg.payload, timestamp: msg.timestamp! });
+          fn({ type: msg.type, payload: msg.payload, timestamp: msg.timestamp ?? Date.now() });
         }
       }
     }
@@ -59,7 +65,11 @@ export class PipeTransport implements Transport {
 
   private send(request: PipeRequest): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      this.pending.set(request.id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(request.id);
+        reject(new Error(`Request ${request.params.path} timed out`));
+      }, PipeTransport.REQUEST_TIMEOUT_MS);
+      this.pending.set(request.id, { resolve, reject, timer });
       Pear.message(JSON.stringify(request));
     });
   }

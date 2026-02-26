@@ -5,3 +5,4 @@ instructions.txt
 test-data/
 web/node_modules/
 web/dist/
+*.js.map
