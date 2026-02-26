@@ -56,6 +56,31 @@ export interface SetupResponse {
   writerKey: string;
 }
 
+/** POST /api/setup/preview response */
+export interface SetupPreviewResponse {
+  counts: {
+    localFiles: number;
+    remoteFiles: number;
+    remoteTombstones: number;
+    matchingFiles: number;
+    localOnlyFiles: number;
+    remoteOnlyFiles: number;
+    fileConflicts: number;
+    tombstoneConflicts: number;
+  };
+  policyImpact: {
+    remoteWins: { overwrite: number; delete: number; totalAffected: number };
+    localWins: { upload: number; conflictCopy: number; totalAffected: number };
+    keepBoth: { conflictCopy: number; totalAffected: number };
+  };
+  samples: {
+    fileConflicts: string[];
+    tombstoneConflicts: string[];
+    localOnly: string[];
+    remoteOnly: string[];
+  };
+}
+
 /** POST /api/invite response */
 export interface InviteResponse {
   inviteCode: string;

@@ -92,6 +92,67 @@ describe("Web Server API", () => {
     expect(res.status).toBe(400);
   });
 
+  it("POST /api/setup/preview validates join input", async () => {
+    const folder = await makeTmpDir();
+    const server = await makeServer();
+
+    const res = await fetch(`${server.url}/api/setup/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder, mode: "create" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("join preview returns impact and setup reuses the prepared join session", async () => {
+    const folderA = await makeTmpDir();
+    const folderB = await makeTmpDir();
+    await writeFile(join(folderA, "shared.txt"), "remote-head");
+    await writeFile(join(folderA, "remote-only.txt"), "remote-only");
+    await writeFile(join(folderB, "shared.txt"), "local-version");
+    await writeFile(join(folderB, "local-only.txt"), "local-only");
+
+    const serverA = await makeServer(folderA);
+    await waitFor(async () => {
+      const res = await fetch(`${serverA.url}/api/files`);
+      const files = await res.json();
+      return files.some((f: { path: string }) => f.path === "/shared.txt");
+    }, 10_000);
+
+    const inviteRes = await fetch(`${serverA.url}/api/invite`, { method: "POST" });
+    const inviteData = (await inviteRes.json()) as { inviteCode: string };
+
+    const serverB = await makeServer();
+    const previewRes = await fetch(`${serverB.url}/api/setup/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        folder: folderB,
+        mode: "join",
+        inviteCode: inviteData.inviteCode,
+      }),
+    });
+    expect(previewRes.status).toBe(200);
+    const preview = await previewRes.json();
+    expect(preview.counts.fileConflicts).toBe(1);
+    expect(preview.counts.localOnlyFiles).toBe(1);
+    expect(preview.counts.remoteOnlyFiles).toBe(1);
+    expect(preview.samples.fileConflicts).toContain("/shared.txt");
+
+    // Setup should succeed with the same invite after preview.
+    const setupRes = await fetch(`${serverB.url}/api/setup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        folder: folderB,
+        mode: "join",
+        inviteCode: inviteData.inviteCode,
+        startupConflictPolicy: "keep-both",
+      }),
+    });
+    expect(setupRes.status).toBe(200);
+  });
+
   it("join setup persists policy in status and across restart", async () => {
     const folderA = await makeTmpDir();
     const folderB = await makeTmpDir();

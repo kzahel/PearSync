@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { createInvite, setup } from "../api";
+import { createInvite, previewSetup, type SetupPreviewResponse, setup } from "../api";
 import { runtime } from "../runtime";
 import styles from "./Setup.module.css";
 
@@ -18,6 +18,8 @@ export function Setup({ onComplete }: SetupProps) {
   const [error, setError] = useState("");
   const [generatedInvite, setGeneratedInvite] = useState("");
   const [copied, setCopied] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [preview, setPreview] = useState<SetupPreviewResponse | null>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   const handleBrowse = () => {
@@ -71,6 +73,33 @@ export function Setup({ onComplete }: SetupProps) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handlePreview = async () => {
+    if (!folder.trim()) {
+      setError("Folder path is required");
+      return;
+    }
+    if (!inviteCode.trim()) {
+      setError("Invite code is required to preview join impact");
+      return;
+    }
+
+    setError("");
+    setPreviewLoading(true);
+    try {
+      const nextPreview = await previewSetup({
+        folder: folder.trim(),
+        mode: "join",
+        inviteCode: inviteCode.trim(),
+      });
+      setPreview(nextPreview);
+    } catch (err) {
+      setPreview(null);
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -190,6 +219,38 @@ export function Setup({ onComplete }: SetupProps) {
                 <option value="local-wins">Local wins (publish local files)</option>
                 <option value="keep-both">Keep both (save local as conflict copy)</option>
               </select>
+
+              <button
+                type="button"
+                className={styles.previewBtn}
+                onClick={handlePreview}
+                disabled={previewLoading}
+              >
+                {previewLoading ? "Previewing..." : "Preview join impact"}
+              </button>
+
+              {preview && (
+                <div className={styles.previewBox}>
+                  <div className={styles.previewTitle}>Join Preview</div>
+                  <div className={styles.previewLine}>
+                    Local files: {preview.counts.localFiles} | Remote files:{" "}
+                    {preview.counts.remoteFiles}
+                  </div>
+                  <div className={styles.previewLine}>
+                    Conflicts: {preview.counts.fileConflicts} | Tombstone collisions:{" "}
+                    {preview.counts.tombstoneConflicts}
+                  </div>
+                  <div className={styles.previewLine}>
+                    Remote-wins affected: {preview.policyImpact.remoteWins.totalAffected}
+                  </div>
+                  <div className={styles.previewLine}>
+                    Local-wins affected: {preview.policyImpact.localWins.totalAffected}
+                  </div>
+                  <div className={styles.previewLine}>
+                    Keep-both affected: {preview.policyImpact.keepBoth.totalAffected}
+                  </div>
+                </div>
+              )}
             </>
           )}
 

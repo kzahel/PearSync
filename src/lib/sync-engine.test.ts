@@ -165,25 +165,21 @@ describe("SyncEngine — local changes", () => {
 		const store = new Corestore(storeDir);
 		const engine = new SyncEngine(store, syncDir);
 		await engine.ready();
-
-		// Write a file first, wait for sync
-		const createPromise = waitForSync(
-			engine,
-			(e) => e.direction === "local-to-remote" && e.type === "update" && e.path === "/to-delete.txt",
-		);
+		await writeFile(join(syncDir, "to-delete.txt"), "temporary");
+		const expectedHash = createHash("sha256").update("temporary").digest("hex");
 		await engine.start();
 
-		await writeFile(join(syncDir, "to-delete.txt"), "temporary");
-		await createPromise;
+		await waitForCondition(async () => {
+			const meta = await engine.getManifest().get("/to-delete.txt");
+			return meta !== null && isFileMetadata(meta) && meta.hash === expectedHash;
+		});
 
 		// Now delete the file
-		const deletePromise = waitForSync(
-			engine,
-			(e) => e.direction === "local-to-remote" && e.type === "delete" && e.path === "/to-delete.txt",
-		);
 		await unlink(join(syncDir, "to-delete.txt"));
-		const event = await deletePromise;
-		expect(event.type).toBe("delete");
+		await waitForCondition(async () => {
+			const meta = await engine.getManifest().get("/to-delete.txt");
+			return meta !== null && isTombstone(meta);
+		});
 
 		// Verify manifest entry is now a tombstone
 		const meta = await engine.getManifest().get("/to-delete.txt");
@@ -744,27 +740,29 @@ describe("Conflict detection", () => {
 		await writeFile(join(syncDirA, "doc.txt"), "A's edit");
 		await writeFile(join(syncDirB, "doc.txt"), "B's edit");
 
-		// Listen for conflict event
-		const conflictPromise = new Promise<SyncEvent>((resolve) => {
-			const handler = (event: SyncEvent) => {
-				if (event.type === "conflict" && event.path === "/doc.txt") {
-					engineA.removeListener("sync", handler);
-					engineB.removeListener("sync", handler);
-					resolve(event);
-				}
-			};
-			engineA.on("sync", handler);
-			engineB.on("sync", handler);
-		});
-
 		// Restart both engines
 		await engineA.start();
 		await engineB.start();
 
-		const conflictEvent = await conflictPromise;
-		expect(conflictEvent.type).toBe("conflict");
-		expect(conflictEvent.conflictPath).toBeDefined();
-		expect(conflictEvent.conflictPath).toMatch(/\.conflict-\d{4}-\d{2}-\d{2}-[a-f0-9]{8}\.txt$/);
+		await waitForCondition(async () => {
+			const filesA = await readdir(syncDirA);
+			const filesB = await readdir(syncDirB);
+			const conflictInA = filesA.find((name) => name.startsWith("doc.conflict-"));
+			const conflictInB = filesB.find((name) => name.startsWith("doc.conflict-"));
+			if (!conflictInA && !conflictInB) return false;
+
+			const contentA = await readFile(join(syncDirA, "doc.txt"), "utf-8");
+			const contentB = await readFile(join(syncDirB, "doc.txt"), "utf-8");
+			return contentA === contentB;
+		});
+
+		const filesA = await readdir(syncDirA);
+		const filesB = await readdir(syncDirB);
+		const conflictNames = [...filesA, ...filesB].filter((name) => name.startsWith("doc.conflict-"));
+		expect(conflictNames.length).toBeGreaterThan(0);
+		for (const name of conflictNames) {
+			expect(name).toMatch(/^doc\.conflict-\d{4}-\d{2}-\d{2}-[a-f0-9]{8}\.txt$/);
+		}
 
 		await engineA.close();
 		await engineB.close();

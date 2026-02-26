@@ -41,6 +41,30 @@ export interface AppEvent {
   detail: string;
 }
 
+export interface SetupPreviewResponse {
+  counts: {
+    localFiles: number;
+    remoteFiles: number;
+    remoteTombstones: number;
+    matchingFiles: number;
+    localOnlyFiles: number;
+    remoteOnlyFiles: number;
+    fileConflicts: number;
+    tombstoneConflicts: number;
+  };
+  policyImpact: {
+    remoteWins: { overwrite: number; delete: number; totalAffected: number };
+    localWins: { upload: number; conflictCopy: number; totalAffected: number };
+    keepBoth: { conflictCopy: number; totalAffected: number };
+  };
+  samples: {
+    fileConflicts: string[];
+    tombstoneConflicts: string[];
+    localOnly: string[];
+    remoteOnly: string[];
+  };
+}
+
 export function getStatus(): Promise<StatusInfo> {
   return transport.get("/api/status");
 }
@@ -52,6 +76,14 @@ export function setup(body: {
   startupConflictPolicy?: StartupConflictPolicy;
 }): Promise<{ ok: boolean; writerKey: string }> {
   return transport.post("/api/setup", body);
+}
+
+export function previewSetup(body: {
+  folder: string;
+  mode: "join";
+  inviteCode: string;
+}): Promise<SetupPreviewResponse> {
+  return transport.post("/api/setup/preview", body);
 }
 
 export function createInvite(): Promise<{ inviteCode: string }> {

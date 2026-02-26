@@ -8,7 +8,14 @@ import express from "express";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { StartupConflictPolicy } from "./api-types.js";
 import { EngineBridge } from "./engine-bridge.js";
-import { resolveFolder, startEngine, startupConflictPolicies } from "./engine-manager.js";
+import {
+  type PreparedJoinSession,
+  prepareJoinPreview,
+  resolveFolder,
+  startEngine,
+  startEngineFromPreparedJoin,
+  startupConflictPolicies,
+} from "./engine-manager.js";
 import type { SyncEngine } from "./lib/sync-engine.js";
 
 export interface ServerOptions {
@@ -33,6 +40,14 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
   let store: InstanceType<typeof Corestore> | null = null;
   let resolvedFolder: string | null = null;
   let currentStartupConflictPolicy: StartupConflictPolicy | null = null;
+  let pendingJoinPreview: PreparedJoinSession | null = null;
+
+  async function clearPendingJoinPreview(): Promise<void> {
+    if (!pendingJoinPreview) return;
+    await pendingJoinPreview.manifest.close();
+    await pendingJoinPreview.store.close();
+    pendingJoinPreview = null;
+  }
 
   // If folder provided, start engine immediately
   if (opts.folder) {
@@ -94,13 +109,29 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
     }
     try {
       resolvedFolder = resolveFolder(folder);
-      const result = await startEngine(
-        resolvedFolder,
-        mode,
-        inviteCode,
-        opts.bootstrap,
-        startupConflictPolicy,
-      );
+      let result:
+        | Awaited<ReturnType<typeof startEngine>>
+        | Awaited<ReturnType<typeof startEngineFromPreparedJoin>>;
+      if (
+        mode === "join" &&
+        inviteCode &&
+        pendingJoinPreview &&
+        pendingJoinPreview.folder === resolvedFolder &&
+        pendingJoinPreview.inviteCode === inviteCode
+      ) {
+        const prepared = pendingJoinPreview;
+        pendingJoinPreview = null;
+        result = await startEngineFromPreparedJoin(prepared, startupConflictPolicy);
+      } else {
+        await clearPendingJoinPreview();
+        result = await startEngine(
+          resolvedFolder,
+          mode,
+          inviteCode,
+          opts.bootstrap,
+          startupConflictPolicy,
+        );
+      }
       engine = result.engine;
       store = result.store;
       currentStartupConflictPolicy = result.startupConflictPolicy;
@@ -112,6 +143,34 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
       }
       res.json({ ok: true, writerKey: engine.getManifest().writerKey });
     } catch (err) {
+      await clearPendingJoinPreview();
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.post("/api/setup/preview", async (req, res) => {
+    if (engine) {
+      res.status(409).json({ error: "Already configured" });
+      return;
+    }
+    const { folder, mode, inviteCode } = req.body as {
+      folder?: string;
+      mode?: "create" | "join";
+      inviteCode?: string;
+    };
+
+    if (!folder || mode !== "join" || !inviteCode) {
+      res.status(400).json({ error: "folder, mode=join, and inviteCode are required" });
+      return;
+    }
+
+    try {
+      resolvedFolder = resolveFolder(folder);
+      await clearPendingJoinPreview();
+      pendingJoinPreview = await prepareJoinPreview(resolvedFolder, inviteCode, opts.bootstrap);
+      res.json(pendingJoinPreview.preview);
+    } catch (err) {
+      await clearPendingJoinPreview();
       res.status(500).json({ error: String(err) });
     }
   });
@@ -186,10 +245,14 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
 
     if (bridge) bridge.detach();
     for (const client of wss.clients) client.close();
+    await clearPendingJoinPreview();
+    let activeManifest: ReturnType<SyncEngine["getManifest"]> | null = null;
     if (engine) {
+      activeManifest = engine.getManifest();
       await engine.stop();
       await engine.close();
     }
+    if (activeManifest) await activeManifest.close();
     if (store) await store.close();
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   }
