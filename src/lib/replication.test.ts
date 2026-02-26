@@ -84,6 +84,7 @@ function buildMetadata(
 	coreKey: Buffer,
 ): FileMetadata {
 	return {
+		kind: "file",
 		size: stored.size,
 		mtime: Date.now(),
 		hash: stored.hash,

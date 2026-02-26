@@ -9,9 +9,10 @@ import { FileStore } from "./file-store";
 import { LocalStateStore } from "./local-state-store";
 import {
 	type FileMetadata,
-	type ManifestValue,
 	type TombstoneMetadata,
 	ManifestStore,
+	isFileMetadata,
+	isPeerMetadata,
 	isTombstone,
 } from "./manifest-store";
 
@@ -99,16 +100,15 @@ export class SyncEngine extends EventEmitter {
 		// Register peer name
 		const writerKey = this.manifest.writerKey;
 		const peerName = writerKey.slice(0, 8);
-		await this.manifest.put(
-			`__peer:${writerKey}`,
-			{ name: peerName } as unknown as ManifestValue,
-		);
+		await this.manifest.putPeer(writerKey, peerName);
 	}
 
 	async start(): Promise<void> {
 		if (!this.drive || !this.fileStore || !this.manifest) {
 			throw new Error("SyncEngine not ready — call ready() first");
 		}
+
+		await this.initialSync();
 
 		this.ensureFsWatchPatched();
 		this.watcher = watch(this.drive, "");
@@ -127,8 +127,6 @@ export class SyncEngine extends EventEmitter {
 		this.watcher.on("error", (err) => this.emit("error", err));
 
 		this.manifest.on("update", this._onRemoteUpdate);
-
-		await this.initialSync();
 	}
 
 	private _onRemoteUpdate = () => {
@@ -171,7 +169,7 @@ export class SyncEngine extends EventEmitter {
 
 	async getPeerName(writerKey: string): Promise<string> {
 		const entry = await this.manifest!.get(`__peer:${writerKey}`);
-		if (entry && "name" in entry) return (entry as { name: string }).name;
+		if (entry && isPeerMetadata(entry)) return entry.name;
 		return writerKey.slice(0, 8); // fallback
 	}
 
@@ -197,17 +195,23 @@ export class SyncEngine extends EventEmitter {
 			const manifestValue = await manifest.get(key);
 
 			// Skip if manifest already has this exact hash (and it's not a tombstone)
-			if (manifestValue && !isTombstone(manifestValue) && manifestValue.hash === hash) return;
+			if (manifestValue && isFileMetadata(manifestValue) && manifestValue.hash === hash) return;
 
 			const stored = await fileStore.writeFile(data);
 			const baseHash = manifestValue
-				? isTombstone(manifestValue)
-					? manifestValue.baseHash
-					: manifestValue.hash
+				? isFileMetadata(manifestValue)
+					? manifestValue.hash
+					: isTombstone(manifestValue)
+						? manifestValue.baseHash
+						: null
 				: null;
-			const seq = manifestValue ? manifestValue.seq + 1 : 1;
+			const seq =
+				manifestValue && (isFileMetadata(manifestValue) || isTombstone(manifestValue))
+					? manifestValue.seq + 1
+					: 1;
 
 			const metadata: FileMetadata = {
+				kind: "file",
 				size: stored.size,
 				mtime,
 				hash: stored.hash,
@@ -233,7 +237,7 @@ export class SyncEngine extends EventEmitter {
 			} satisfies SyncEvent);
 		} else if (type === "delete") {
 			const manifestValue = await manifest.get(key);
-			if (manifestValue && !isTombstone(manifestValue)) {
+			if (manifestValue && isFileMetadata(manifestValue)) {
 				// Write tombstone instead of remove()
 				await manifest.putTombstone(key, fileStore.core.key.toString("hex"), {
 					baseHash: manifestValue.hash,
@@ -260,6 +264,7 @@ export class SyncEngine extends EventEmitter {
 				await this.handleRemoteDeletion(path, metadata);
 				continue;
 			}
+			if (!isFileMetadata(metadata)) continue;
 
 			// Skip our own writes
 			if (metadata.writerKey === myWriterKey) continue;
@@ -496,7 +501,7 @@ export class SyncEngine extends EventEmitter {
 
 			const hash = createHash("sha256").update(data).digest("hex");
 			const existing = await manifest.get(entry.key);
-			if (existing && !isTombstone(existing) && existing.hash === hash) {
+			if (existing && isFileMetadata(existing) && existing.hash === hash) {
 				// Already in sync — update local state tracker
 				await this.localState.set(entry.key, {
 					lastSyncedHash: hash,
@@ -509,15 +514,21 @@ export class SyncEngine extends EventEmitter {
 
 			const stored = await fileStore.writeFile(data);
 			const metadata: FileMetadata = {
+				kind: "file",
 				size: stored.size,
 				mtime: entry.mtime,
 				hash: stored.hash,
 				baseHash: existing
-					? isTombstone(existing)
-						? existing.baseHash
-						: existing.hash
+					? isFileMetadata(existing)
+						? existing.hash
+						: isTombstone(existing)
+							? existing.baseHash
+							: null
 					: null,
-				seq: existing ? existing.seq + 1 : 1,
+				seq:
+					existing && (isFileMetadata(existing) || isTombstone(existing))
+						? existing.seq + 1
+						: 1,
 				writerKey: fileStore.core.key.toString("hex"),
 				blocks: { offset: stored.offset, length: stored.length },
 			};

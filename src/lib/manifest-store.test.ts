@@ -15,10 +15,11 @@ async function makeTmpDir(): Promise<string> {
   return dir;
 }
 
-function makeMetadata(overrides?: Partial<FileMetadata>): FileMetadata {
+function makeMetadata(overrides?: Partial<Omit<FileMetadata, "kind">>): FileMetadata {
   const baseHash = overrides?.baseHash ?? null;
   const seq = overrides?.seq ?? 1;
   return {
+    kind: "file",
     size: 1024,
     mtime: Date.now(),
     hash: "a".repeat(64),
@@ -161,13 +162,12 @@ describe("ManifestStore — CRUD", () => {
     await store.close();
   });
 
-  it("paths are stored as-is (no normalization)", async () => {
+  it("rejects relative paths (strict key policy)", async () => {
     const store = new Corestore(await makeTmpDir());
     const manifest = ManifestStore.create(store, { replicate: false });
     await manifest.ready();
 
-    await manifest.put("relative/path.txt", makeMetadata());
-    expect(await manifest.get("relative/path.txt")).not.toBeNull();
+    await expect(manifest.put("relative/path.txt", makeMetadata())).rejects.toThrow();
     expect(await manifest.get("/relative/path.txt")).toBeNull();
 
     await manifest.close();
@@ -269,6 +269,38 @@ describe("ManifestStore — edge cases", () => {
     expect(typeof manifest.writerKey).toBe("string");
     expect(manifest.writerKey).toHaveLength(64);
     expect(manifest.writable).toBe(true);
+
+    await manifest.close();
+    await store.close();
+  });
+});
+
+describe("ManifestStore — schema and namespace enforcement", () => {
+  it("rejects writing file metadata to reserved system keys", async () => {
+    const store = new Corestore(await makeTmpDir());
+    const manifest = ManifestStore.create(store, { replicate: false });
+    await manifest.ready();
+
+    await expect(manifest.put("__not-allowed", makeMetadata())).rejects.toThrow();
+
+    await manifest.close();
+    await store.close();
+  });
+
+  it("throws when reading malformed metadata payload", async () => {
+    const store = new Corestore(await makeTmpDir());
+    const manifest = ManifestStore.create(store, { replicate: false });
+    await manifest.ready();
+
+    await manifest.autopass.add(
+      "/bad.txt",
+      JSON.stringify({
+        kind: "file",
+        hash: "missing-required-fields",
+      }),
+    );
+
+    await expect(manifest.get("/bad.txt")).rejects.toThrow();
 
     await manifest.close();
     await store.close();

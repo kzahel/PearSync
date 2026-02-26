@@ -8,7 +8,13 @@ import Corestore from "corestore";
 import testnet from "hyperdht/testnet";
 import { afterEach, describe, expect, it } from "vitest";
 import { LocalStateStore } from "./local-state-store";
-import { type FileMetadata, ManifestStore, isTombstone } from "./manifest-store";
+import {
+	type FileMetadata,
+	type TombstoneMetadata,
+	ManifestStore,
+	isFileMetadata,
+	isTombstone,
+} from "./manifest-store";
 import { type SyncEvent, SyncEngine, buildConflictPath } from "./sync-engine";
 
 let tmpDirs: string[] = [];
@@ -42,6 +48,19 @@ function waitForSync(
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForCondition(
+	condition: () => Promise<boolean> | boolean,
+	timeoutMs = 15000,
+	intervalMs = 50,
+): Promise<void> {
+	const start = Date.now();
+	while (Date.now() - start < timeoutMs) {
+		if (await condition()) return;
+		await sleep(intervalMs);
+	}
+	throw new Error("Timed out waiting for condition");
 }
 
 /** Wait until a condition is met, re-checking on each update event. */
@@ -178,33 +197,28 @@ describe("SyncEngine — local changes", () => {
 		const engine = new SyncEngine(store, syncDir);
 		await engine.ready();
 
-		const createPromise = waitForSync(
-			engine,
-			(e) => e.direction === "local-to-remote" && e.type === "update" && e.path === "/modify.txt",
-		);
 		await engine.start();
 
 		await writeFile(join(syncDir, "modify.txt"), "version 1");
-		await createPromise;
+		const version1Hash = createHash("sha256").update("version 1").digest("hex");
+		await waitForCondition(async () => {
+			const meta = await engine.getManifest().get("/modify.txt");
+			return meta !== null && isFileMetadata(meta) && meta.hash === version1Hash;
+		});
 
 		const firstMeta = await engine.getManifest().get("/modify.txt");
 		expect(firstMeta).not.toBeNull();
 		expect(isTombstone(firstMeta!)).toBe(false);
 		const firstHash = (firstMeta as FileMetadata).hash;
 
-		// Modify the file
-		const modifyPromise = waitForSync(
-			engine,
-			(e) =>
-				e.direction === "local-to-remote" &&
-				e.type === "update" &&
-				e.path === "/modify.txt",
-		);
-
-		// Small delay to ensure watcher sees it as a new change
+		// Modify the file.
 		await sleep(100);
 		await writeFile(join(syncDir, "modify.txt"), "version 2");
-		await modifyPromise;
+		const version2Hash = createHash("sha256").update("version 2").digest("hex");
+		await waitForCondition(async () => {
+			const meta = await engine.getManifest().get("/modify.txt");
+			return meta !== null && isFileMetadata(meta) && meta.hash === version2Hash;
+		});
 
 		const secondMeta = await engine.getManifest().get("/modify.txt");
 		expect(secondMeta).not.toBeNull();
@@ -285,6 +299,7 @@ describe("SyncEngine — remote changes", () => {
 		const offset = result.length - 1;
 
 			const metadata: FileMetadata = {
+				kind: "file",
 				size: fileContent.length,
 				mtime: Date.now(),
 				hash: createHash("sha256").update(fileContent).digest("hex"),
@@ -330,6 +345,7 @@ describe("SyncEngine — remote changes", () => {
 		const offset = result.length - 1;
 
 			const metadata: FileMetadata = {
+				kind: "file",
 				size: fileContent.length,
 				mtime: Date.now(),
 				hash: createHash("sha256").update(fileContent).digest("hex"),
@@ -538,18 +554,18 @@ describe("Tombstones", () => {
 		await writeFile(join(syncDir, "tombstone-test.txt"), "will be deleted");
 		await createPromise;
 
-		const deletePromise = waitForSync(
-			engine,
-			(e) => e.direction === "local-to-remote" && e.type === "delete" && e.path === "/tombstone-test.txt",
-		);
 		await unlink(join(syncDir, "tombstone-test.txt"));
-		await deletePromise;
+		await waitForCondition(async () => {
+			const current = await engine.getManifest().get("/tombstone-test.txt");
+			return current !== null && isTombstone(current);
+		});
 
 		const meta = await engine.getManifest().get("/tombstone-test.txt");
 		expect(meta).not.toBeNull();
-		expect(isTombstone(meta!)).toBe(true);
-		expect(meta!.writerKey).toBeDefined();
-		expect(meta!.mtime).toBeGreaterThan(0);
+			expect(isTombstone(meta!)).toBe(true);
+			if (!meta || !isTombstone(meta)) throw new Error("Expected tombstone metadata");
+			expect(meta.writerKey).toBeDefined();
+			expect(meta.mtime).toBeGreaterThan(0);
 
 		await engine.close();
 		await store.close();
@@ -593,13 +609,8 @@ describe("Tombstones", () => {
 		expect(contentB.toString()).toBe("going away");
 
 		// A deletes the file
-		const syncBDelete = waitForSync(
-			engineB,
-			(e) => e.direction === "remote-to-local" && e.type === "delete" && e.path === "/deleteme.txt",
-			15000,
-		);
 		await unlink(join(syncDirA, "deleteme.txt"));
-		await syncBDelete;
+		await waitForCondition(() => !existsSync(join(syncDirB, "deleteme.txt")));
 
 		// File should be gone from B's folder
 		expect(existsSync(join(syncDirB, "deleteme.txt"))).toBe(false);
@@ -918,27 +929,20 @@ describe("Deletion propagation", () => {
 		const engine = new SyncEngine(store, syncDir);
 		await engine.ready();
 
-		const createPromise = waitForSync(
-			engine,
-			(e) => e.direction === "local-to-remote" && e.type === "update" && e.path === "/to-remote-delete.txt",
-			15000,
-		);
 		await engine.start();
 
 		await writeFile(join(syncDir, "to-remote-delete.txt"), "content");
-		await createPromise;
+		await waitForCondition(async () => {
+			const meta = await engine.getManifest().get("/to-remote-delete.txt");
+			return meta !== null && isFileMetadata(meta);
+		});
 
 		// Simulate a remote peer writing a tombstone
 		const remoteWriterKey = "deadbeef".repeat(8);
 		const manifest = engine.getManifest();
 
-		const deletePromise = waitForSync(
-			engine,
-			(e) => e.direction === "remote-to-local" && e.type === "delete" && e.path === "/to-remote-delete.txt",
-			15000,
-		);
 		await manifest.putTombstone("/to-remote-delete.txt", remoteWriterKey);
-		await deletePromise;
+		await waitForCondition(() => !existsSync(join(syncDir, "to-remote-delete.txt")));
 
 		expect(existsSync(join(syncDir, "to-remote-delete.txt"))).toBe(false);
 
@@ -1027,19 +1031,19 @@ describe("Revision-based reconciliation", () => {
 		const engine = new SyncEngine(store, syncDir);
 		await engine.ready();
 
-		const firstSync = waitForSync(
-			engine,
-			(e) => e.direction === "local-to-remote" && e.type === "update" && e.path === "/clock-skew.txt",
-			15000,
-		);
-		await engine.start();
-		await writeFile(join(syncDir, "clock-skew.txt"), "base");
-		await firstSync;
+			await engine.start();
+			await writeFile(join(syncDir, "clock-skew.txt"), "base");
+			const baseHashExpected = createHash("sha256").update("base").digest("hex");
+			await waitForCondition(async () => {
+				const meta = await engine.getManifest().get("/clock-skew.txt");
+				return meta !== null && isFileMetadata(meta) && meta.hash === baseHashExpected;
+			});
 
-		const baseMeta = await engine.getManifest().get("/clock-skew.txt");
-		expect(baseMeta).not.toBeNull();
-		expect(isTombstone(baseMeta!)).toBe(false);
-		const baseHash = (baseMeta as FileMetadata).hash;
+			const baseMeta = await engine.getManifest().get("/clock-skew.txt");
+			expect(baseMeta).not.toBeNull();
+			expect(isFileMetadata(baseMeta!)).toBe(true);
+			const baseFile = baseMeta as FileMetadata;
+			const baseHash = baseFile.hash;
 
 		await engine.stop();
 
@@ -1053,27 +1057,26 @@ describe("Revision-based reconciliation", () => {
 		await remoteCore.ready();
 		const remoteData = Buffer.from("remote-edit");
 		const append = await remoteCore.append(remoteData);
-		const metadata = {
-			size: remoteData.length,
-			mtime: 1,
-			hash: createHash("sha256").update(remoteData).digest("hex"),
-			writerKey: remoteCore.key.toString("hex"),
-			blocks: { offset: append.length - 1, length: 1 },
-			baseHash,
-			seq: (baseMeta as FileMetadata).seq + 1,
-		} as unknown as FileMetadata;
-		await engine.getManifest().put("/clock-skew.txt", metadata);
+			const metadata: FileMetadata = {
+				kind: "file",
+				size: remoteData.length,
+				mtime: 1,
+				hash: createHash("sha256").update(remoteData).digest("hex"),
+				writerKey: remoteCore.key.toString("hex"),
+				blocks: { offset: append.length - 1, length: 1 },
+				baseHash,
+				seq: baseFile.seq + 1,
+			};
+			await engine.getManifest().put("/clock-skew.txt", metadata);
 
-		const conflict = waitForSync(
-			engine,
-			(e) => e.direction === "remote-to-local" && e.type === "conflict" && e.path === "/clock-skew.txt",
-			15000,
-		);
-		await engine.start();
-		await conflict;
+			await engine.start();
+			await waitForCondition(async () => {
+				const current = await readFile(join(syncDir, "clock-skew.txt"), "utf-8");
+				return current === "remote-edit";
+			});
 
-		const winner = await readFile(join(syncDir, "clock-skew.txt"), "utf-8");
-		expect(winner).toBe("remote-edit");
+			const winner = await readFile(join(syncDir, "clock-skew.txt"), "utf-8");
+			expect(winner).toBe("remote-edit");
 
 		const files = await readdir(syncDir);
 		const conflictName = files.find((name) => name.startsWith("clock-skew.conflict-"));
@@ -1110,15 +1113,16 @@ describe("Revision-based reconciliation", () => {
 		const v1Hash = createHash("sha256").update("v1").digest("hex");
 		const v2Hash = createHash("sha256").update("v2").digest("hex");
 
-		const v2Meta = {
-			size: remoteV2.length,
-			mtime: Date.now(),
-			hash: v2Hash,
-			writerKey: remoteCore.key.toString("hex"),
-			blocks: { offset: append.length - 1, length: 1 },
-			baseHash: v1Hash,
-			seq: 2,
-		} as unknown as FileMetadata;
+			const v2Meta: FileMetadata = {
+				kind: "file",
+				size: remoteV2.length,
+				mtime: Date.now(),
+				hash: v2Hash,
+				writerKey: remoteCore.key.toString("hex"),
+				blocks: { offset: append.length - 1, length: 1 },
+				baseHash: v1Hash,
+				seq: 2,
+			};
 		const downloadV2 = waitForSync(
 			engine,
 			(e) => e.direction === "remote-to-local" && e.type === "update" && e.path === "/stale-delete.txt",
@@ -1127,14 +1131,15 @@ describe("Revision-based reconciliation", () => {
 		await engine.getManifest().put("/stale-delete.txt", v2Meta);
 		await downloadV2;
 
-		const staleTombstone = {
-			deleted: true,
-			mtime: Date.now() + 1,
-			writerKey: "f".repeat(64),
-			baseHash: v1Hash,
-			seq: 3,
-		};
-		await engine.getManifest().put("/stale-delete.txt", staleTombstone as any);
+			const staleTombstone: TombstoneMetadata = {
+				kind: "tombstone",
+				deleted: true,
+				mtime: Date.now() + 1,
+				writerKey: "f".repeat(64),
+				baseHash: v1Hash,
+				seq: 3,
+			};
+			await engine.getManifest().put("/stale-delete.txt", staleTombstone);
 		await sleep(1200);
 
 		expect(existsSync(join(syncDir, "stale-delete.txt"))).toBe(true);
@@ -1203,15 +1208,15 @@ describe("Startup reconciliation", () => {
 			await writeFile(join(syncDirB, "doc.txt"), "v2");
 			await syncBUpload;
 
-			const v2Hash = createHash("sha256").update("v2").digest("hex");
-			await waitUntil(manifestB, async () => {
-				const meta = await manifestB!.get("/doc.txt");
-				return meta !== null && !isTombstone(meta) && meta.hash === v2Hash;
-			});
-			await waitUntil(manifestA, async () => {
-				const meta = await manifestA!.get("/doc.txt");
-				return meta !== null && !isTombstone(meta) && meta.hash === v2Hash;
-			});
+				const v2Hash = createHash("sha256").update("v2").digest("hex");
+				await waitUntil(manifestB, async () => {
+					const meta = await manifestB!.get("/doc.txt");
+					return meta !== null && isFileMetadata(meta) && meta.hash === v2Hash;
+				});
+				await waitUntil(manifestA, async () => {
+					const meta = await manifestA!.get("/doc.txt");
+					return meta !== null && isFileMetadata(meta) && meta.hash === v2Hash;
+				});
 
 			await engineA.start();
 			await sleep(2500);
@@ -1333,40 +1338,22 @@ describe("Reserved manifest key policy", () => {
 		await engine.ready();
 		await engine.start();
 
-		const remoteCore = store.get({ name: "remote-system-key-core" });
-		await remoteCore.ready();
-		const data = Buffer.from("internal");
-		const result = await remoteCore.append(data);
-		const offset = result.length - 1;
+		const metadata: FileMetadata = {
+			kind: "file",
+			size: 8,
+			mtime: Date.now(),
+			hash: createHash("sha256").update("internal").digest("hex"),
+			baseHash: null,
+			seq: 1,
+			writerKey: "a".repeat(64),
+			blocks: { offset: 0, length: 1 },
+		};
 
-			const metadata: FileMetadata = {
-				size: data.length,
-				mtime: Date.now(),
-				hash: createHash("sha256").update(data).digest("hex"),
-				baseHash: null,
-				seq: 1,
-				writerKey: remoteCore.key.toString("hex"),
-				blocks: { offset, length: 1 },
-			};
-
-		let wroteSystemPath = false;
-		engine.on("sync", (event: SyncEvent) => {
-			if (
-				event.direction === "remote-to-local" &&
-				event.type === "update" &&
-				event.path === "__system-note"
-			) {
-				wroteSystemPath = true;
-			}
-		});
-
-		await engine.getManifest().put("__system-note", metadata);
+		await expect(engine.getManifest().put("__system-note", metadata)).rejects.toThrow();
 		await sleep(1000);
 
-		expect(wroteSystemPath).toBe(false);
 		expect(existsSync(join(syncDir, "__system-note"))).toBe(false);
 
-		await remoteCore.close();
 		await engine.close();
 		await store.close();
 	});
