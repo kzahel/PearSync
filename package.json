@@ -1,0 +1,38 @@
+{
+  "name": "holepu",
+  "main": "index.js",
+  "type": "module",
+  "pear": {
+    "pre": "pear-electron/pre",
+    "name": "pearsync",
+    "gui": {
+      "main": "ui/index.html",
+      "backgroundColor": "#0f1117",
+      "width": 1100,
+      "height": 700,
+      "minWidth": 600,
+      "minHeight": 400
+    }
+  },
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "pear run -d .",
+    "test": "brittle test/*.test.js"
+  },
+  "devDependencies": {
+    "brittle": "^3.0.0",
+    "pear-interface": "^1.0.0"
+  },
+  "dependencies": {
+    "autopass": "^3.3.0",
+    "bare-fs": "^4.5.5",
+    "bare-path": "^3.0.0",
+    "corestore": "^7.8.0",
+    "hyperdrive": "^13.3.0",
+    "localdrive": "^2.2.0",
+    "mirror-drive": "^1.13.0",
+    "pear-bridge": "^1.2.0",
+    "pear-electron": "^1.7.10",
+    "watch-drive": "^2.0.3"
+  }
+}
