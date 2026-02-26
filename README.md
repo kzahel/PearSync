@@ -1,3 +1,5 @@
+Built with https://yepanywhere.com/
+
 # PearSync
 
 Peer-to-peer folder sync built on the [Holepunch](https://holepunch.to/) stack. Two or more peers share a folder over encrypted, append-only Hypercores — no central server required.

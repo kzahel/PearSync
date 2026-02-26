@@ -24,17 +24,40 @@ let resolvedFolder = null
 let currentStartupConflictPolicy = null
 let removePushListener = null
 
-// JSON-RPC over pipe
+// JSON-RPC over pipe (newline-delimited JSON)
 // Request:  { id, method: "get"|"post", params: { path, body?, query? } }
 // Response: { id, result } or { id, error }
 // Push:     { type, payload, timestamp } (same shape as WsMessage)
 
-pipe.on('data', async (data) => {
+const PIPE_DEBUG = typeof Pear !== 'undefined' && Pear.config?.args?.includes('--pipe-debug')
+function pipeLog (dir, summary, detail) {
+  if (!PIPE_DEBUG) return
+  const ts = new Date().toISOString().slice(11, 23)
+  if (detail !== undefined) console.log(`[pipe:main ${ts}] ${dir} ${summary}`, typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 200))
+  else console.log(`[pipe:main ${ts}] ${dir} ${summary}`)
+}
+
+function pipeSend (obj) {
+  pipe.write(JSON.stringify(obj) + '\n')
+}
+
+let pipeBuf = ''
+pipe.on('data', (data) => {
+  pipeBuf += Buffer.from(data).toString()
+  let nl
+  while ((nl = pipeBuf.indexOf('\n')) !== -1) {
+    const line = pipeBuf.slice(0, nl)
+    pipeBuf = pipeBuf.slice(nl + 1)
+    if (line) handlePipeLine(line)
+  }
+})
+
+async function handlePipeLine (line) {
   let request
   try {
-    request = JSON.parse(Buffer.from(data).toString())
+    request = JSON.parse(line)
   } catch (err) {
-    console.error('[pipe] malformed JSON:', err)
+    console.error('[pipe] malformed JSON:', line.slice(0, 120), err.message)
     return
   }
 
@@ -45,15 +68,18 @@ pipe.on('data', async (data) => {
 
   const { id, method, params } = request
   const { path, body, query } = params || {}
+  pipeLog('<<', `#${id} ${method?.toUpperCase()} ${path}`)
 
   try {
     const result = await handleRequest(method, path, body, query)
-    pipe.write(JSON.stringify({ id, result }))
+    pipeLog('>>', `#${id} OK`, result)
+    pipeSend({ id, result })
   } catch (err) {
+    pipeLog('>>', `#${id} ERR`, String(err))
     console.error(`[pipe] ${method} ${path} error:`, err)
-    pipe.write(JSON.stringify({ id, error: String(err) }))
+    pipeSend({ id, error: String(err) })
   }
-})
+}
 
 async function handleRequest (method, path, body, query) {
   if (method === 'get' && path === '/api/status') {
@@ -76,7 +102,8 @@ async function handleRequest (method, path, body, query) {
     engineBridge = new EngineBridge(engine, resolvedFolder, currentStartupConflictPolicy)
     engineBridge.attach()
     removePushListener = engineBridge.addPushListener((msg) => {
-      pipe.write(JSON.stringify(msg))
+      pipeLog('>>', `push:${msg.type}`)
+      pipeSend(msg)
     })
     return { ok: true, writerKey: engine.getManifest().writerKey }
   }
