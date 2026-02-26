@@ -116,6 +116,38 @@ docs/                     # Design docs (authentication, reconciliation)
 prompts/                  # Layer specifications
 ```
 
+## Syncthing Comparison
+
+PearSync and [Syncthing](https://github.com/syncthing/syncthing) solve the same core problem — decentralized, encrypted folder sync with no central server. A detailed architecture and algorithm comparison lives in [`docs/syncthing-comparison.md`](docs/syncthing-comparison.md). Key takeaways:
+
+**Where the architectures fundamentally differ:**
+- Syncthing uses **vector clocks** per-file for causal ordering across all peers. PearSync offloads this to **Autobase linearization** and uses a simpler local state tracker to catch conflicts the linearization hides. Both are deterministic — just different mechanisms.
+- Syncthing has a sophisticated **copier → puller → finisher pipeline** with block-level dedup (only transfer changed 128K–16M blocks). PearSync does **whole-file transfers** — the single biggest efficiency gap.
+
+**Conflict resolution is very similar:**
+- Both detect same-content edits and skip conflict creation
+- Both have "edit beats delete" semantics
+- Both use a `previousBlocksHash`/`baseHash` concept for fast-forward detection
+- Both create renamed conflict copies with date + device ID in the filename
+- Winner selection differs in mechanism (ModTime + DeviceID tiebreak vs Autobase linearization) but both are deterministic across all peers
+
+**Features Syncthing has that PearSync doesn't (roughly by impact):**
+1. **Ignore patterns** (`.stignore`) — essential for real use (`.git/`, `node_modules/`)
+2. **Folder modes** — receive-only, send-only, encrypted relay (4 modes vs 1)
+3. **Rename detection** — block hash matching avoids re-transferring renamed files
+4. **Block-level sync** — 1-byte change to 1GB file transfers ~1 block, not the whole file
+5. **Multi-folder with per-folder device sets**
+6. **Case conflict handling** — explicit detection on macOS/Windows
+7. **Permission/xattr tracking** — per-platform metadata
+8. **Conflict copy limits** — configurable cap to prevent accumulation
+9. **Untrusted encryption** — AES-SIV + XChaCha20-Poly1305 for relay peers
+
+**Where PearSync has advantages:**
+- Simpler conflict model (easier to reason about)
+- Fully decentralized discovery (no global discovery server dependency)
+- Cryptographic identity baked in from the start (Autopass pairing)
+- Integration tests exercise the full stack (vs Syncthing's mock-heavy approach)
+
 ## License
 
 Apache-2.0
