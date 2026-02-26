@@ -111,6 +111,76 @@ declare module "autopass" {
   export = Autopass;
 }
 
+declare module "localdrive" {
+  interface LocaldriveEntry {
+    key: string;
+    value: {
+      executable: boolean;
+      linkname: string | null;
+      blob: {
+        byteOffset: number;
+        blockOffset: number;
+        blockLength: number;
+        byteLength: number;
+      } | null;
+      metadata: unknown;
+    };
+    mtime: number;
+  }
+
+  interface LocaldriveOptions {
+    metadata?: unknown;
+    followLinks?: boolean;
+    atomic?: boolean;
+  }
+
+  class Localdrive {
+    root: string;
+    constructor(root: string, opts?: LocaldriveOptions);
+    ready(): Promise<void>;
+    close(): Promise<void>;
+    entry(key: string, opts?: { follow?: boolean }): Promise<LocaldriveEntry | null>;
+    get(key: string): Promise<Buffer | null>;
+    put(key: string, buffer: Buffer, opts?: { executable?: boolean }): Promise<void>;
+    del(key: string): Promise<void>;
+    exists(key: string): Promise<boolean>;
+    list(folder?: string): AsyncIterable<LocaldriveEntry>;
+    toPath(key: string): string;
+    compare(a: LocaldriveEntry, b: LocaldriveEntry): number;
+  }
+
+  export = Localdrive;
+}
+
+declare module "watch-drive" {
+  import type { Readable } from "node:stream";
+  import type Localdrive from "localdrive";
+
+  interface WatchDiff {
+    type: "update" | "delete";
+    key: string;
+  }
+
+  interface WatchBatch {
+    key: Buffer | null;
+    length: number;
+    fork: number;
+    diff: WatchDiff[];
+  }
+
+  interface WatchOptions {
+    eagerOpen?: boolean;
+  }
+
+  function watch(
+    drive: Localdrive,
+    key?: string,
+    opts?: WatchOptions,
+  ): Readable & AsyncIterable<WatchBatch>;
+
+  export = watch;
+}
+
 declare module "hyperdht/testnet" {
   interface TestnetResult {
     bootstrap: { host: string; port: number }[];
