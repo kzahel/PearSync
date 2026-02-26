@@ -245,6 +245,7 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
 
     if (bridge) bridge.detach();
     for (const client of wss.clients) client.close();
+    wss.close();
     await clearPendingJoinPreview();
     let activeManifest: ReturnType<SyncEngine["getManifest"]> | null = null;
     if (engine) {

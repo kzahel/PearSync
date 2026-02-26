@@ -505,12 +505,9 @@ export class SyncEngine extends EventEmitter {
 				listener = maybeListener;
 			}
 
-			const normalizedOptions = options?.recursive
-				? { ...options, recursive: false }
-				: options;
 			const watcher = (listener
-				? (originalWatch as any)(filename, normalizedOptions, listener)
-				: (originalWatch as any)(filename, normalizedOptions)) as FSWatcher;
+				? (originalWatch as any)(filename, options, listener)
+				: (originalWatch as any)(filename, options)) as FSWatcher;
 
 			// Node 25 can emit EMFILE from recursive watchers in long-running test workers.
 			// localwatch does not attach an error listener, so this would otherwise crash.

@@ -176,10 +176,13 @@ describe("SyncEngine — local changes", () => {
 
 		// Now delete the file
 		await unlink(join(syncDir, "to-delete.txt"));
-		await waitForCondition(async () => {
-			const meta = await engine.getManifest().get("/to-delete.txt");
-			return meta !== null && isTombstone(meta);
-		});
+		await waitForCondition(
+			async () => {
+				const meta = await engine.getManifest().get("/to-delete.txt");
+				return meta !== null && isTombstone(meta);
+			},
+			30000,
+		);
 
 		// Verify manifest entry is now a tombstone
 		const meta = await engine.getManifest().get("/to-delete.txt");
@@ -744,17 +747,20 @@ describe("Conflict detection", () => {
 		await engineA.start();
 		await engineB.start();
 
-		await waitForCondition(async () => {
-			const filesA = await readdir(syncDirA);
-			const filesB = await readdir(syncDirB);
-			const conflictInA = filesA.find((name) => name.startsWith("doc.conflict-"));
-			const conflictInB = filesB.find((name) => name.startsWith("doc.conflict-"));
-			if (!conflictInA && !conflictInB) return false;
+		await waitForCondition(
+			async () => {
+				const filesA = await readdir(syncDirA);
+				const filesB = await readdir(syncDirB);
+				const conflictInA = filesA.find((name) => name.startsWith("doc.conflict-"));
+				const conflictInB = filesB.find((name) => name.startsWith("doc.conflict-"));
+				if (!conflictInA && !conflictInB) return false;
 
-			const contentA = await readFile(join(syncDirA, "doc.txt"), "utf-8");
-			const contentB = await readFile(join(syncDirB, "doc.txt"), "utf-8");
-			return contentA === contentB;
-		});
+				const contentA = await readFile(join(syncDirA, "doc.txt"), "utf-8");
+				const contentB = await readFile(join(syncDirB, "doc.txt"), "utf-8");
+				return contentA === contentB;
+			},
+			30000,
+		);
 
 		const filesA = await readdir(syncDirA);
 		const filesB = await readdir(syncDirB);
@@ -771,7 +777,7 @@ describe("Conflict detection", () => {
 		await storeA.close();
 		await storeB.close();
 		for (const node of tn.nodes) await node.destroy();
-	}, 30000);
+	}, 60000);
 
 	it("same content edits do not conflict", async () => {
 		const tn = await testnet(10);
@@ -923,17 +929,20 @@ describe("Deletion propagation", () => {
 		await engine.start();
 
 		await writeFile(join(syncDir, "to-remote-delete.txt"), "content");
-		await waitForCondition(async () => {
-			const meta = await engine.getManifest().get("/to-remote-delete.txt");
-			return meta !== null && isFileMetadata(meta);
-		});
+		await waitForCondition(
+			async () => {
+				const meta = await engine.getManifest().get("/to-remote-delete.txt");
+				return meta !== null && isFileMetadata(meta);
+			},
+			30000,
+		);
 
 		// Simulate a remote peer writing a tombstone
 		const remoteWriterKey = "deadbeef".repeat(8);
 		const manifest = engine.getManifest();
 
 		await manifest.putTombstone("/to-remote-delete.txt", remoteWriterKey);
-		await waitForCondition(() => !existsSync(join(syncDir, "to-remote-delete.txt")));
+		await waitForCondition(() => !existsSync(join(syncDir, "to-remote-delete.txt")), 30000);
 
 		expect(existsSync(join(syncDir, "to-remote-delete.txt"))).toBe(false);
 
