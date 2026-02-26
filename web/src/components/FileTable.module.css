@@ -1,0 +1,100 @@
+.container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.search {
+  padding: 0.375rem 0.625rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 0.75rem;
+  width: 300px;
+}
+
+.search:focus {
+  outline: 2px solid var(--blue);
+  outline-offset: -1px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.table th:hover {
+  color: var(--text);
+}
+
+.sortArrow {
+  margin-left: 0.25rem;
+  font-size: 0.625rem;
+}
+
+.table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8125rem;
+}
+
+.table tr:hover td {
+  background: color-mix(in srgb, var(--surface) 50%, var(--bg));
+}
+
+.statusDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 0.375rem;
+  vertical-align: middle;
+}
+
+.synced {
+  background: var(--green);
+}
+
+.syncingDot {
+  background: var(--blue);
+}
+
+.conflictDot {
+  background: var(--yellow);
+}
+
+.localOnly {
+  background: var(--gray);
+}
+
+.mono {
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.footer {
+  margin-top: 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.empty {
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 3rem 1rem;
+}

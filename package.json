@@ -22,14 +22,20 @@
     "fmt": "biome check --write .",
     "lint": "biome check .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev:server": "tsx src/server.ts",
+    "dev:ui": "cd web && npx vite dev",
+    "build:ui": "cd web && npx vite build"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
+    "@types/express": "^5.0.6",
     "@types/node": "^25.3.1",
+    "@types/ws": "^8.18.1",
     "brittle": "^3.0.0",
     "esbuild": "^0.27.3",
     "pear-interface": "^1.0.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },
@@ -38,11 +44,13 @@
     "bare-fs": "^4.5.5",
     "bare-path": "^3.0.0",
     "corestore": "^7.8.0",
+    "express": "^5.2.1",
     "hyperdrive": "^13.3.0",
     "localdrive": "^2.2.0",
     "mirror-drive": "^1.13.0",
     "pear-bridge": "^1.2.0",
     "pear-electron": "^1.7.10",
-    "watch-drive": "^2.0.3"
+    "watch-drive": "^2.0.3",
+    "ws": "^8.19.0"
   }
 }

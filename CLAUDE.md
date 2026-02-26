@@ -10,6 +10,7 @@
 | [`prompts/layer2-autopass-manifest.md`](prompts/layer2-autopass-manifest.md) | Layer 2 spec: ManifestStore, Autopass CRUD, pairing, replication |
 | [`prompts/layer3-local-replication.md`](prompts/layer3-local-replication.md) | Layer 3 spec: Integration tests for FileStore + ManifestStore replication |
 | [`prompts/layer4-folder-watcher.md`](prompts/layer4-folder-watcher.md) | Layer 4 spec: SyncEngine, folder watching, local↔remote file sync |
+| [`prompts/layer5-conflict-resolution.md`](prompts/layer5-conflict-resolution.md) | Layer 5 spec: Conflict detection, tombstones, deletion propagation, peer names |
 
 ## After Every Change
 

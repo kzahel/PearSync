@@ -1,0 +1,67 @@
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+}
+
+.table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8125rem;
+}
+
+.statusDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 0.375rem;
+  vertical-align: middle;
+}
+
+.online {
+  background: var(--green);
+}
+
+.offline {
+  background: var(--gray);
+}
+
+.writerKey {
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.writerKey:hover {
+  color: var(--text);
+}
+
+.localTag {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  margin-left: 0.5rem;
+  padding: 0.125rem 0.375rem;
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.empty {
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 3rem 1rem;
+}
