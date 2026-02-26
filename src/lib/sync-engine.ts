@@ -6,6 +6,7 @@ import Localdrive from "localdrive";
 import watch from "watch-drive";
 import type Corestore from "corestore";
 import { FileStore } from "./file-store";
+import { normalizePath } from "./file-utils";
 import { LocalStateStore } from "./local-state-store";
 import {
 	type FileMetadata,
@@ -121,7 +122,7 @@ export class SyncEngine extends EventEmitter {
 		await this.initialSync();
 
 		this.ensureFsWatchPatched();
-		this.watcher = watch(this.drive, "");
+		this.watcher = watch(this.drive, "", { eagerOpen: true });
 		this.applyLocalwatchDestroyWorkaround(this.watcher);
 		this.watcher.on("data", (batch: { diff: { type: "update" | "delete"; key: string }[] }) => {
 			for (const diff of batch.diff) {
@@ -135,8 +136,11 @@ export class SyncEngine extends EventEmitter {
 			}
 		});
 		this.watcher.on("error", (err) => this.emit("error", err));
+		await this.waitForWatcherReady(this.watcher);
 
 		this.manifest.on("update", this._onRemoteUpdate);
+		this._onRemoteUpdate();
+		await this.remoteUpdateQueue;
 	}
 
 	private _onRemoteUpdate = () => {
@@ -184,9 +188,11 @@ export class SyncEngine extends EventEmitter {
 	}
 
 	private async handleLocalChange(type: "update" | "delete", key: string): Promise<void> {
-		if (key.startsWith("/.pearsync/")) return;
-		if (this.suppressedPaths.has(key)) {
-			this.suppressedPaths.delete(key);
+		const normalizedKey = normalizePath(key);
+
+		if (normalizedKey.startsWith("/.pearsync/")) return;
+		if (this.suppressedPaths.has(normalizedKey)) {
+			this.suppressedPaths.delete(normalizedKey);
 			return;
 		}
 
@@ -195,14 +201,14 @@ export class SyncEngine extends EventEmitter {
 		const manifest = this.manifest!;
 
 		if (type === "update") {
-			const data = await drive.get(key);
+			const data = await drive.get(normalizedKey);
 			if (data === null) return;
 
-			const entry = await drive.entry(key);
+			const entry = await drive.entry(normalizedKey);
 			const mtime = entry?.mtime ?? Date.now();
 
 			const hash = createHash("sha256").update(data).digest("hex");
-			const manifestValue = await manifest.get(key);
+			const manifestValue = await manifest.get(normalizedKey);
 
 			// Skip if manifest already has this exact hash (and it's not a tombstone)
 			if (manifestValue && isFileMetadata(manifestValue) && manifestValue.hash === hash) return;
@@ -230,10 +236,10 @@ export class SyncEngine extends EventEmitter {
 				writerKey: fileStore.core.key.toString("hex"),
 				blocks: { offset: stored.offset, length: stored.length },
 			};
-			await manifest.put(key, metadata);
+			await manifest.put(normalizedKey, metadata);
 
 			// Update local state tracker
-			await this.localState.set(key, {
+			await this.localState.set(normalizedKey, {
 				lastSyncedHash: hash,
 				lastSyncedMtime: mtime,
 				lastManifestHash: hash,
@@ -243,24 +249,30 @@ export class SyncEngine extends EventEmitter {
 			this.emit("sync", {
 				direction: "local-to-remote",
 				type: "update",
-				path: key,
+				path: normalizedKey,
 			} satisfies SyncEvent);
 		} else if (type === "delete") {
-			const manifestValue = await manifest.get(key);
+			const manifestValue = await manifest.get(normalizedKey);
 			if (manifestValue && isFileMetadata(manifestValue)) {
 				// Write tombstone instead of remove()
-				await manifest.putTombstone(key, fileStore.core.key.toString("hex"), {
+				await manifest.putTombstone(normalizedKey, fileStore.core.key.toString("hex"), {
 					baseHash: manifestValue.hash,
 					seq: manifestValue.seq + 1,
 				});
-				await this.localState.remove(key);
+				await this.localState.remove(normalizedKey);
 				this.emit("sync", {
 					direction: "local-to-remote",
 					type: "delete",
-					path: key,
+					path: normalizedKey,
 				} satisfies SyncEvent);
 			}
 		}
+	}
+
+	private async waitForWatcherReady(stream: unknown): Promise<void> {
+		const opened = (stream as { opened?: Promise<boolean> }).opened;
+		if (!opened) return;
+		await opened;
 	}
 
 	private async handleRemoteChanges(): Promise<void> {
