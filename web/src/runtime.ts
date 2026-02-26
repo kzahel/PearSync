@@ -1,11 +1,17 @@
 export interface RuntimeCapabilities {
   /** True when running inside pear-electron Chromium renderer */
-  isPear: boolean;
+  readonly isPear: boolean;
   /** True when native folder picking (absolute paths) is available */
-  canPickFolder: boolean;
+  readonly canPickFolder: boolean;
 }
 
+// Use getters to prevent Vite/Rollup from evaluating the Pear check at build
+// time and tree-shaking PipeTransport out of the bundle.
 export const runtime: RuntimeCapabilities = {
-  isPear: typeof globalThis.Pear !== "undefined",
-  canPickFolder: typeof globalThis.Pear !== "undefined",
+  get isPear() {
+    return typeof globalThis.Pear !== "undefined";
+  },
+  get canPickFolder() {
+    return typeof globalThis.Pear !== "undefined";
+  },
 };
