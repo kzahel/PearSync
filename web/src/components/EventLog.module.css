@@ -70,6 +70,10 @@
   color: var(--red);
 }
 
+.audit {
+  color: var(--blue);
+}
+
 .peerEvent {
   color: var(--gray);
 }

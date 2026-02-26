@@ -1,8 +1,18 @@
+export type StartupConflictPolicy = "remote-wins" | "local-wins" | "keep-both";
+
 /** Event stored in the ring buffer and returned by GET /api/events */
 export interface AppEvent {
   id: number;
   timestamp: number;
-  type: "upload" | "download" | "delete" | "conflict" | "peer-join" | "peer-leave" | "error";
+  type:
+    | "upload"
+    | "download"
+    | "delete"
+    | "conflict"
+    | "peer-join"
+    | "peer-leave"
+    | "error"
+    | "audit";
   path?: string;
   detail: string;
 }
@@ -30,6 +40,7 @@ export interface PeerInfo {
 export interface StatusInfo {
   state: "idle" | "syncing" | "watching" | "setup";
   folder: string | null;
+  startupConflictPolicy: StartupConflictPolicy | null;
 }
 
 /** WebSocket message envelope */

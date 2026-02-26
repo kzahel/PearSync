@@ -39,7 +39,7 @@ describe("Web Server API", () => {
     const server = await makeServer();
     const res = await fetch(`${server.url}/api/status`);
     const data = await res.json();
-    expect(data).toEqual({ state: "setup", folder: null });
+    expect(data).toEqual({ state: "setup", folder: null, startupConflictPolicy: null });
   });
 
   it("POST /api/setup creates engine and starts sync", async () => {
@@ -60,6 +60,7 @@ describe("Web Server API", () => {
     const statusData = await statusRes.json();
     expect(statusData.state).toBe("watching");
     expect(statusData.folder).toBe(folder);
+    expect(statusData.startupConflictPolicy).toBeNull();
   });
 
   it("POST /api/setup rejects duplicate setup", async () => {
@@ -89,6 +90,46 @@ describe("Web Server API", () => {
       }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it("join setup persists policy in status and across restart", async () => {
+    const folderA = await makeTmpDir();
+    const folderB = await makeTmpDir();
+    await writeFile(join(folderA, "shared.txt"), "remote-head");
+    await writeFile(join(folderB, "shared.txt"), "local-joiner");
+
+    const serverA = await makeServer(folderA);
+    await waitFor(async () => {
+      const res = await fetch(`${serverA.url}/api/files`);
+      const files = await res.json();
+      return files.some((f: { path: string }) => f.path === "/shared.txt");
+    }, 10_000);
+
+    const inviteRes = await fetch(`${serverA.url}/api/invite`, { method: "POST" });
+    const inviteData = (await inviteRes.json()) as { inviteCode: string };
+
+    const serverB = await makeServer();
+    const joinRes = await fetch(`${serverB.url}/api/setup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        folder: folderB,
+        mode: "join",
+        inviteCode: inviteData.inviteCode,
+        startupConflictPolicy: "keep-both",
+      }),
+    });
+    expect(joinRes.status).toBe(200);
+
+    const statusRes = await fetch(`${serverB.url}/api/status`);
+    const statusData = await statusRes.json();
+    expect(statusData.startupConflictPolicy).toBe("keep-both");
+
+    await serverB.close();
+    const serverBRestart = await makeServer(folderB);
+    const restartStatusRes = await fetch(`${serverBRestart.url}/api/status`);
+    const restartStatus = await restartStatusRes.json();
+    expect(restartStatus.startupConflictPolicy).toBe("keep-both");
   });
 
   it("GET /api/files returns file list after sync", async () => {

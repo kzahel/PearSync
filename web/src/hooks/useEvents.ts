@@ -19,7 +19,7 @@ export function useEvents() {
   }, []);
 
   const onMessage = useCallback((msg: WsMessage) => {
-    if (msg.type !== "sync" && msg.type !== "error") return;
+    if (msg.type !== "sync" && msg.type !== "error" && msg.type !== "status") return;
 
     const payload = msg.payload as Record<string, unknown>;
     let type: AppEvent["type"];
@@ -29,6 +29,10 @@ export function useEvents() {
     if (msg.type === "error") {
       type = "error";
       detail = (payload.message as string) ?? "Unknown error";
+    } else if (msg.type === "status") {
+      if (payload.eventType !== "audit") return;
+      type = "audit";
+      detail = (payload.detail as string) ?? "Startup policy audit";
     } else {
       const action = payload.action as string;
       const direction = payload.direction as string;

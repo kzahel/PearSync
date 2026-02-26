@@ -14,6 +14,7 @@ export function StatusBar({ peerCount, fileCount }: StatusBarProps) {
 
   const state = status?.state ?? "idle";
   const folder = status?.folder ?? "";
+  const policy = status?.startupConflictPolicy ?? null;
 
   const badgeClass =
     state === "watching" ? styles.watching : state === "syncing" ? styles.syncing : styles.offline;
@@ -34,6 +35,7 @@ export function StatusBar({ peerCount, fileCount }: StatusBarProps) {
       <span className={styles.stat}>
         {fileCount} file{fileCount !== 1 ? "s" : ""}
       </span>
+      {policy && <span className={styles.stat}>policy: {policy}</span>}
       <span className={styles.spacer} />
       <button type="button" className={styles.themeBtn} onClick={toggle} title="Toggle theme">
         {theme === "dark" ? "\u2600" : "\u263E"}

@@ -12,6 +12,7 @@ const EVENT_TYPES = [
   "delete",
   "conflict",
   "error",
+  "audit",
   "peer-join",
   "peer-leave",
 ] as const;
@@ -22,6 +23,7 @@ const ICONS: Record<string, string> = {
   delete: "\u2716",
   conflict: "\u26A0",
   error: "\u2718",
+  audit: "i",
   "peer-join": "\u25CF",
   "peer-leave": "\u25CB",
 };
@@ -32,6 +34,7 @@ const STYLE_MAP: Record<string, string> = {
   delete: styles.delete,
   conflict: styles.conflict,
   error: styles.error,
+  audit: styles.audit,
   "peer-join": styles.peerEvent,
   "peer-leave": styles.peerEvent,
 };

@@ -28,10 +28,17 @@ export interface SyncEvent {
 	conflictPath?: string;
 }
 
+export type StartupConflictPolicy = "remote-wins" | "local-wins" | "keep-both";
+
+export interface StartupPolicyAuditEvent {
+	policy: StartupConflictPolicy;
+	affectedPaths: number;
+}
+
 export interface SyncEngineOptions {
 	bootstrap?: { host: string; port: number }[];
 	manifest?: ManifestStore;
-	startupConflictPolicy?: "remote-wins" | "local-wins" | "keep-both";
+	startupConflictPolicy?: StartupConflictPolicy;
 }
 
 export function buildConflictPath(originalPath: string, peerName: string): string {
@@ -61,6 +68,7 @@ export class SyncEngine extends EventEmitter {
 	private options: SyncEngineOptions;
 	private localState: LocalStateStore;
 	private startupReconciliationActive = false;
+	private startupPolicyAffectedPaths = 0;
 
 	/** Tracks which paths we're currently writing to disk, to suppress watcher feedback */
 	private suppressedPaths: Set<string> = new Set();
@@ -307,6 +315,7 @@ export class SyncEngine extends EventEmitter {
 		if (!tracked) {
 			if (this.startupReconciliationActive) {
 				const policy = this.options.startupConflictPolicy ?? "remote-wins";
+				this.startupPolicyAffectedPaths += 1;
 				if (policy === "local-wins") {
 					await this.handleLocalChange("update", path);
 					return;
@@ -388,8 +397,34 @@ export class SyncEngine extends EventEmitter {
 
 		const tracked = this.localState.get(path);
 
-		// If we have no record of this file, it's either already gone or never existed locally
-		if (!tracked) return;
+		// If we have no record of this file, it's either already gone or never existed locally.
+		// During first-join reconciliation with local/keep-both policy, preserve local content
+		// as conflict copy and still honor the tombstone at the canonical path.
+		if (!tracked) {
+			if (this.startupReconciliationActive) {
+				const policy = this.options.startupConflictPolicy ?? "remote-wins";
+				if (policy === "local-wins" || policy === "keep-both") {
+					const localData = await this.drive!.get(path);
+					if (localData) {
+						this.startupPolicyAffectedPaths += 1;
+						const localWriterKey = this.fileStore!.core.key.toString("hex");
+						const peerName = await this.getPeerName(localWriterKey);
+						const conflictPath = buildConflictPath(path, `${peerName}-tombstone`);
+						this.suppressedPaths.add(conflictPath);
+						await this.drive!.put(conflictPath, localData);
+						this.suppressedPaths.add(path);
+						await this.drive!.del(path);
+						this.emit("sync", {
+							direction: "remote-to-local",
+							type: "conflict",
+							path,
+							conflictPath,
+						} satisfies SyncEvent);
+					}
+				}
+			}
+			return;
+		}
 		if (tombstone.baseHash !== tracked.lastSyncedHash) return;
 
 		// Check if local file was modified since last sync
@@ -506,10 +541,18 @@ export class SyncEngine extends EventEmitter {
 
 		// Reconcile remote state first so a restarting peer does not re-upload stale local files.
 		this.startupReconciliationActive = true;
+		this.startupPolicyAffectedPaths = 0;
 		try {
 			await this.handleRemoteChanges();
 		} finally {
 			this.startupReconciliationActive = false;
+		}
+
+		if (this.options.startupConflictPolicy && this.startupPolicyAffectedPaths > 0) {
+			this.emit("audit", {
+				policy: this.options.startupConflictPolicy,
+				affectedPaths: this.startupPolicyAffectedPaths,
+			} satisfies StartupPolicyAuditEvent);
 		}
 
 		for await (const entry of drive.list("/")) {

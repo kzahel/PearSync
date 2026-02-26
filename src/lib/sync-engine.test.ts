@@ -15,7 +15,12 @@ import {
 	isFileMetadata,
 	isTombstone,
 } from "./manifest-store";
-import { type SyncEvent, SyncEngine, buildConflictPath } from "./sync-engine";
+import {
+	type StartupPolicyAuditEvent,
+	type SyncEvent,
+	SyncEngine,
+	buildConflictPath,
+} from "./sync-engine";
 
 let tmpDirs: string[] = [];
 
@@ -196,10 +201,8 @@ describe("SyncEngine — local changes", () => {
 		const store = new Corestore(storeDir);
 		const engine = new SyncEngine(store, syncDir);
 		await engine.ready();
-
-		await engine.start();
-
 		await writeFile(join(syncDir, "modify.txt"), "version 1");
+		await engine.start();
 		const version1Hash = createHash("sha256").update("version 1").digest("hex");
 		await waitForCondition(async () => {
 			const meta = await engine.getManifest().get("/modify.txt");
@@ -211,9 +214,10 @@ describe("SyncEngine — local changes", () => {
 		expect(isTombstone(firstMeta!)).toBe(false);
 		const firstHash = (firstMeta as FileMetadata).hash;
 
-		// Modify the file.
-		await sleep(100);
+		// Modify while stopped so startup reconciliation must detect the change.
+		await engine.stop();
 		await writeFile(join(syncDir, "modify.txt"), "version 2");
+		await engine.start();
 		const version2Hash = createHash("sha256").update("version 2").digest("hex");
 		await waitForCondition(async () => {
 			const meta = await engine.getManifest().get("/modify.txt");
@@ -1370,6 +1374,8 @@ describe("Startup join conflict policy", () => {
 		const { engine, store, remoteCore, syncDir, localContent } =
 			await setupJoinConflict("local-wins");
 		try {
+			const audits: StartupPolicyAuditEvent[] = [];
+			engine.on("audit", (event) => audits.push(event as StartupPolicyAuditEvent));
 			await engine.start();
 			const localHash = createHash("sha256").update(localContent).digest("hex");
 			await waitForCondition(async () => {
@@ -1386,6 +1392,11 @@ describe("Startup join conflict policy", () => {
 			expect((meta as FileMetadata).writerKey).toBe(
 				engine.getFileStore().core.key.toString("hex"),
 			);
+			expect(audits).toHaveLength(1);
+			expect(audits[0]).toEqual({
+				policy: "local-wins",
+				affectedPaths: 1,
+			});
 		} finally {
 			await engine.close();
 			await remoteCore.close();
@@ -1413,6 +1424,56 @@ describe("Startup join conflict policy", () => {
 			});
 			const conflictContent = await readFile(join(syncDir, conflictFile), "utf-8");
 			expect(conflictContent).toBe(localContent);
+		} finally {
+			await engine.close();
+			await remoteCore.close();
+			await store.close();
+		}
+	});
+
+	it("local-wins does not resurrect paths with remote tombstones on first join", async () => {
+		const storeDir = await makeTmpDir();
+		const syncDir = await makeTmpDir("pearsync-folder-");
+		await writeFile(join(syncDir, "deleted.txt"), "local-existing");
+
+		const store = new Corestore(storeDir);
+		const engine = new SyncEngine(store, syncDir, { startupConflictPolicy: "local-wins" });
+		await engine.ready();
+
+		const remoteCore = store.get({ name: "remote-join-tombstone" });
+		await remoteCore.ready();
+		const remoteSeed = Buffer.from("remote-before-delete");
+		const append = await remoteCore.append(remoteSeed);
+		const remoteMeta: FileMetadata = {
+			kind: "file",
+			size: remoteSeed.length,
+			mtime: Date.now(),
+			hash: createHash("sha256").update(remoteSeed).digest("hex"),
+			baseHash: null,
+			seq: 1,
+			writerKey: remoteCore.key.toString("hex"),
+			blocks: { offset: append.length - 1, length: 1 },
+		};
+		await engine.getManifest().put("/deleted.txt", remoteMeta);
+		await engine.getManifest().putTombstone("/deleted.txt", remoteCore.key.toString("hex"), {
+			seq: 2,
+			baseHash: remoteMeta.hash,
+		});
+
+		try {
+			await engine.start();
+			await waitForCondition(() => !existsSync(join(syncDir, "deleted.txt")), 15000, 100);
+
+			const entries = await readdir(syncDir);
+			const conflictCopy = entries.find((name) => name.startsWith("deleted.conflict-"));
+			expect(conflictCopy).toBeDefined();
+			const restored = await readFile(join(syncDir, conflictCopy!), "utf-8");
+			expect(restored).toBe("local-existing");
+
+			await sleep(800);
+			const meta = await engine.getManifest().get("/deleted.txt");
+			expect(meta).not.toBeNull();
+			expect(isTombstone(meta!)).toBe(true);
 		} finally {
 			await engine.close();
 			await remoteCore.close();

@@ -1,64 +1,15 @@
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Corestore from "corestore";
 import express from "express";
 import { type WebSocket, WebSocketServer } from "ws";
+import type { StartupConflictPolicy } from "./api-types.js";
 import { EngineBridge } from "./engine-bridge.js";
-import { ManifestStore } from "./lib/manifest-store.js";
-import { SyncEngine, type SyncEngineOptions } from "./lib/sync-engine.js";
-
-type StartupConflictPolicy = NonNullable<SyncEngineOptions["startupConflictPolicy"]>;
-const startupConflictPolicies: StartupConflictPolicy[] = ["remote-wins", "local-wins", "keep-both"];
-
-export interface ServerOptions {
-  folder?: string;
-  port?: number;
-  bootstrap?: { host: string; port: number }[];
-}
-
-export interface PearSyncServer {
-  listen(port: number): Promise<number>;
-  close(): Promise<void>;
-  url: string;
-  httpServer: http.Server;
-}
-
-async function startEngine(
-  folder: string,
-  mode: "create" | "join",
-  inviteCode: string | undefined,
-  bootstrap?: { host: string; port: number }[],
-  startupConflictPolicy?: StartupConflictPolicy,
-): Promise<{ engine: SyncEngine; store: InstanceType<typeof Corestore> }> {
-  await mkdir(folder, { recursive: true });
-  const storePath = join(folder, ".pearsync", "corestore");
-  await mkdir(storePath, { recursive: true });
-  const store = new Corestore(storePath);
-
-  let manifest: ManifestStore;
-  if (mode === "join" && inviteCode) {
-    manifest = await ManifestStore.pair(store, inviteCode, { bootstrap });
-  } else {
-    manifest = ManifestStore.create(store, { bootstrap });
-  }
-
-  const engine = new SyncEngine(store, folder, { manifest, startupConflictPolicy });
-  await engine.ready();
-  await engine.start();
-  return { engine, store };
-}
-
-function resolveFolder(folder: string): string {
-  if (folder.startsWith("~/") || folder === "~") {
-    return join(homedir(), folder.slice(2));
-  }
-  return folder;
-}
+import { resolveFolder, startEngine, startupConflictPolicies } from "./engine-manager.js";
+import type { SyncEngine } from "./lib/sync-engine.js";
 
 export async function createServer(opts: ServerOptions): Promise<PearSyncServer> {
   const app = express();
@@ -68,6 +19,7 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
   let bridge: EngineBridge | null = null;
   let store: InstanceType<typeof Corestore> | null = null;
   let resolvedFolder: string | null = null;
+  let currentStartupConflictPolicy: StartupConflictPolicy | null = null;
 
   // If folder provided, start engine immediately
   if (opts.folder) {
@@ -75,7 +27,8 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
     const result = await startEngine(resolvedFolder, "create", undefined, opts.bootstrap);
     engine = result.engine;
     store = result.store;
-    bridge = new EngineBridge(engine, resolvedFolder);
+    currentStartupConflictPolicy = result.startupConflictPolicy;
+    bridge = new EngineBridge(engine, resolvedFolder, currentStartupConflictPolicy);
     bridge.attach();
   }
 
@@ -103,7 +56,7 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
     if (bridge) {
       res.json(bridge.getStatus());
     } else {
-      res.json({ state: "setup", folder: null });
+      res.json({ state: "setup", folder: null, startupConflictPolicy: null });
     }
   });
 
@@ -137,7 +90,8 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
       );
       engine = result.engine;
       store = result.store;
-      bridge = new EngineBridge(engine, resolvedFolder);
+      currentStartupConflictPolicy = result.startupConflictPolicy;
+      bridge = new EngineBridge(engine, resolvedFolder, currentStartupConflictPolicy);
       bridge.attach();
       // Register existing WS clients with the new bridge
       for (const ws of wss.clients) {
