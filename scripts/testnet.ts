@@ -68,7 +68,6 @@ if (args.length === 1 && /^\d+$/.test(args[0])) {
   // Default: 2 peers
   for (let i = 0; i < 2; i++) {
     const dir = await mkdtemp(join(tmpdir(), `pearsync-test-${i}-`));
-    folders.push(dir);
     tmpFolders.push(dir);
   }
   folders = tmpFolders;
@@ -142,18 +141,36 @@ try {
 
   // Wait for Ctrl+C
   await new Promise<void>((resolve) => {
+    let force = false;
     for (const sig of ["SIGINT", "SIGTERM"] as const) {
-      process.on(sig, () => resolve());
+      process.on(sig, () => {
+        if (force) {
+          console.log("\nForce exit.");
+          process.exit(1);
+        }
+        force = true;
+        resolve();
+      });
     }
   });
 } finally {
   console.log("\nShutting down...");
+
+  // Force exit if cleanup takes too long
+  const forceTimer = setTimeout(() => {
+    console.error("Shutdown timed out, forcing exit.");
+    process.exit(1);
+  }, 5000);
+  forceTimer.unref();
+
   for (const s of servers) {
     try {
       await s.close();
     } catch {}
   }
-  await testnet.destroy();
+  try {
+    await testnet.destroy();
+  } catch {}
 
   // Clean up temp dirs
   for (const dir of tmpFolders) {

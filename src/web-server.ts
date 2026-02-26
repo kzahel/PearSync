@@ -255,6 +255,7 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
     }
     if (activeManifest) await activeManifest.close();
     if (store) await store.close();
+    httpServer.closeAllConnections();
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   }
 
