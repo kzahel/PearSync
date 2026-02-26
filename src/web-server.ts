@@ -10,7 +10,10 @@ import express from "express";
 import { type WebSocket, WebSocketServer } from "ws";
 import { EngineBridge } from "./engine-bridge.js";
 import { ManifestStore } from "./lib/manifest-store.js";
-import { SyncEngine } from "./lib/sync-engine.js";
+import { SyncEngine, type SyncEngineOptions } from "./lib/sync-engine.js";
+
+type StartupConflictPolicy = NonNullable<SyncEngineOptions["startupConflictPolicy"]>;
+const startupConflictPolicies: StartupConflictPolicy[] = ["remote-wins", "local-wins", "keep-both"];
 
 export interface ServerOptions {
   folder?: string;
@@ -30,6 +33,7 @@ async function startEngine(
   mode: "create" | "join",
   inviteCode: string | undefined,
   bootstrap?: { host: string; port: number }[],
+  startupConflictPolicy?: StartupConflictPolicy,
 ): Promise<{ engine: SyncEngine; store: InstanceType<typeof Corestore> }> {
   await mkdir(folder, { recursive: true });
   const storePath = join(folder, ".pearsync", "corestore");
@@ -43,7 +47,7 @@ async function startEngine(
     manifest = ManifestStore.create(store, { bootstrap });
   }
 
-  const engine = new SyncEngine(store, folder, { manifest });
+  const engine = new SyncEngine(store, folder, { manifest, startupConflictPolicy });
   await engine.ready();
   await engine.start();
   return { engine, store };
@@ -108,18 +112,29 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
       res.status(409).json({ error: "Already configured" });
       return;
     }
-    const { folder, mode, inviteCode } = req.body as {
+    const { folder, mode, inviteCode, startupConflictPolicy } = req.body as {
       folder?: string;
       mode?: "create" | "join";
       inviteCode?: string;
+      startupConflictPolicy?: StartupConflictPolicy;
     };
     if (!folder || !mode) {
       res.status(400).json({ error: "folder and mode are required" });
       return;
     }
+    if (startupConflictPolicy && !startupConflictPolicies.includes(startupConflictPolicy)) {
+      res.status(400).json({ error: "invalid startupConflictPolicy" });
+      return;
+    }
     try {
       resolvedFolder = resolveFolder(folder);
-      const result = await startEngine(resolvedFolder, mode, inviteCode, opts.bootstrap);
+      const result = await startEngine(
+        resolvedFolder,
+        mode,
+        inviteCode,
+        opts.bootstrap,
+        startupConflictPolicy,
+      );
       engine = result.engine;
       store = result.store;
       bridge = new EngineBridge(engine, resolvedFolder);

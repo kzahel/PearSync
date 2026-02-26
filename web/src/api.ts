@@ -37,6 +37,7 @@ export async function setup(body: {
   folder: string;
   mode: "create" | "join";
   inviteCode?: string;
+  startupConflictPolicy?: "remote-wins" | "local-wins" | "keep-both";
 }): Promise<{ ok: boolean; writerKey: string }> {
   const res = await fetch("/api/setup", {
     method: "POST",

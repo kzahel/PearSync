@@ -10,6 +10,9 @@ export function Setup({ onComplete }: SetupProps) {
   const [folder, setFolder] = useState("~/PearSync");
   const [mode, setMode] = useState<"create" | "join">("create");
   const [inviteCode, setInviteCode] = useState("");
+  const [startupConflictPolicy, setStartupConflictPolicy] = useState<
+    "remote-wins" | "local-wins" | "keep-both"
+  >("remote-wins");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [generatedInvite, setGeneratedInvite] = useState("");
@@ -32,6 +35,7 @@ export function Setup({ onComplete }: SetupProps) {
         folder: folder.trim(),
         mode,
         inviteCode: mode === "join" ? inviteCode.trim() : undefined,
+        startupConflictPolicy: mode === "join" ? startupConflictPolicy : undefined,
       });
       if (mode === "create") {
         const { inviteCode: code } = await createInvite();
@@ -127,6 +131,24 @@ export function Setup({ onComplete }: SetupProps) {
                 onChange={(e) => setInviteCode(e.target.value)}
                 placeholder="Paste invite code here"
               />
+
+              <label className={styles.label} htmlFor="startup-conflict-policy">
+                Join conflict policy
+              </label>
+              <select
+                id="startup-conflict-policy"
+                className={styles.input}
+                value={startupConflictPolicy}
+                onChange={(e) =>
+                  setStartupConflictPolicy(
+                    e.target.value as "remote-wins" | "local-wins" | "keep-both",
+                  )
+                }
+              >
+                <option value="remote-wins">Remote wins (adopt existing head)</option>
+                <option value="local-wins">Local wins (publish local files)</option>
+                <option value="keep-both">Keep both (save local as conflict copy)</option>
+              </select>
             </>
           )}
 

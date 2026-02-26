@@ -74,6 +74,23 @@ describe("Web Server API", () => {
     expect(res.status).toBe(409);
   });
 
+  it("POST /api/setup rejects invalid startup conflict policy", async () => {
+    const folder = await makeTmpDir();
+    const server = await makeServer();
+
+    const res = await fetch(`${server.url}/api/setup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        folder,
+        mode: "join",
+        inviteCode: "dummy",
+        startupConflictPolicy: "invalid",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("GET /api/files returns file list after sync", async () => {
     const folder = await makeTmpDir();
     await writeFile(join(folder, "hello.txt"), "hello world");

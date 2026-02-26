@@ -31,6 +31,7 @@ export interface SyncEvent {
 export interface SyncEngineOptions {
 	bootstrap?: { host: string; port: number }[];
 	manifest?: ManifestStore;
+	startupConflictPolicy?: "remote-wins" | "local-wins" | "keep-both";
 }
 
 export function buildConflictPath(originalPath: string, peerName: string): string {
@@ -59,6 +60,7 @@ export class SyncEngine extends EventEmitter {
 	private remoteUpdateQueue: Promise<void> = Promise.resolve();
 	private options: SyncEngineOptions;
 	private localState: LocalStateStore;
+	private startupReconciliationActive = false;
 
 	/** Tracks which paths we're currently writing to disk, to suppress watcher feedback */
 	private suppressedPaths: Set<string> = new Set();
@@ -303,6 +305,18 @@ export class SyncEngine extends EventEmitter {
 
 		// Case 3: No tracking state → first sync, treat remote as authoritative
 		if (!tracked) {
+			if (this.startupReconciliationActive) {
+				const policy = this.options.startupConflictPolicy ?? "remote-wins";
+				if (policy === "local-wins") {
+					await this.handleLocalChange("update", path);
+					return;
+				}
+				if (policy === "keep-both") {
+					await this.handleConflict(path, remote, localData);
+					return;
+				}
+			}
+
 			await this.downloadFile(path, remote);
 			this.emit("sync", {
 				direction: "remote-to-local",
@@ -491,7 +505,12 @@ export class SyncEngine extends EventEmitter {
 		const manifest = this.manifest!;
 
 		// Reconcile remote state first so a restarting peer does not re-upload stale local files.
-		await this.handleRemoteChanges();
+		this.startupReconciliationActive = true;
+		try {
+			await this.handleRemoteChanges();
+		} finally {
+			this.startupReconciliationActive = false;
+		}
 
 		for await (const entry of drive.list("/")) {
 			if (entry.key.startsWith("/.pearsync/")) continue;

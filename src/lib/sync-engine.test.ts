@@ -240,40 +240,29 @@ describe("SyncEngine — local changes", () => {
 		const store = new Corestore(storeDir);
 		const engine = new SyncEngine(store, syncDir);
 		await engine.ready();
-
-		const createPromise = waitForSync(
-			engine,
-			(e) => e.direction === "local-to-remote" && e.type === "update",
-		);
-		await engine.start();
-
 		await writeFile(join(syncDir, "same.txt"), "unchanged content");
-		await createPromise;
+		await engine.start();
+		const expectedHash = createHash("sha256").update("unchanged content").digest("hex");
+		await waitForCondition(async () => {
+			const meta = await engine.getManifest().get("/same.txt");
+			return meta !== null && isFileMetadata(meta) && meta.hash === expectedHash;
+		});
 
 		const firstMeta = await engine.getManifest().get("/same.txt");
 		expect(firstMeta).not.toBeNull();
+		expect(isFileMetadata(firstMeta!)).toBe(true);
 
 		// Touch the file (rewrite with same content)
-		let extraSyncFired = false;
-		engine.on("sync", (event: SyncEvent) => {
-			if (event.path === "/same.txt" && event.direction === "local-to-remote") {
-				extraSyncFired = true;
-			}
-		});
-
 		await sleep(100);
 		await writeFile(join(syncDir, "same.txt"), "unchanged content");
-
-		// Wait a bit to see if a sync event fires
-		await sleep(1000);
-
-		expect(extraSyncFired).toBe(false);
+		await sleep(1200);
 
 		// Manifest should still have same entry
 		const secondMeta = await engine.getManifest().get("/same.txt");
 		expect(secondMeta).not.toBeNull();
-		expect(isTombstone(secondMeta!)).toBe(false);
+		expect(isFileMetadata(secondMeta!)).toBe(true);
 		expect((secondMeta as FileMetadata).hash).toBe((firstMeta as FileMetadata).hash);
+		expect((secondMeta as FileMetadata).seq).toBe((firstMeta as FileMetadata).seq);
 
 		await engine.close();
 		await store.close();
@@ -998,24 +987,19 @@ describe("Deletion propagation", () => {
 		const store = new Corestore(storeDir);
 		const engine = new SyncEngine(store, syncDir);
 		await engine.ready();
-
-		const syncPromise = waitForSync(
-			engine,
-			(e) => e.direction === "local-to-remote" && e.type === "update" && e.path === "/brand-new.txt",
-			15000,
-		);
-		await engine.start();
-
 		await writeFile(join(syncDir, "brand-new.txt"), "new file content");
-		await syncPromise;
+		await engine.start();
+		const expectedHash = createHash("sha256").update("new file content").digest("hex");
+		await waitForCondition(async () => {
+			const meta = await engine.getManifest().get("/brand-new.txt");
+			return meta !== null && isFileMetadata(meta) && meta.hash === expectedHash;
+		});
 
 		// Verify it was uploaded, not deleted
 		const meta = await engine.getManifest().get("/brand-new.txt");
 		expect(meta).not.toBeNull();
 		expect(isTombstone(meta!)).toBe(false);
-		expect((meta as FileMetadata).hash).toBe(
-			createHash("sha256").update("new file content").digest("hex"),
-		);
+		expect((meta as FileMetadata).hash).toBe(expectedHash);
 
 		await engine.close();
 		await store.close();
@@ -1326,6 +1310,115 @@ describe("Startup reconciliation", () => {
 			}
 		}
 	}, 60000);
+});
+
+describe("Startup join conflict policy", () => {
+	async function setupJoinConflict(
+		policy?: "remote-wins" | "local-wins" | "keep-both",
+	) {
+		const storeDir = await makeTmpDir();
+		const syncDir = await makeTmpDir("pearsync-folder-");
+		const localContent = "local-join-content";
+		const remoteContent = "remote-head-content";
+
+		await writeFile(join(syncDir, "join.txt"), localContent);
+
+		const store = new Corestore(storeDir);
+		const engine = policy
+			? new SyncEngine(store, syncDir, { startupConflictPolicy: policy })
+			: new SyncEngine(store, syncDir);
+		await engine.ready();
+
+		const remoteCore = store.get({ name: `remote-join-policy-${policy ?? "default"}` });
+		await remoteCore.ready();
+		const remoteBuffer = Buffer.from(remoteContent);
+		const append = await remoteCore.append(remoteBuffer);
+		const metadata: FileMetadata = {
+			kind: "file",
+			size: remoteBuffer.length,
+			mtime: Date.now(),
+			hash: createHash("sha256").update(remoteBuffer).digest("hex"),
+			baseHash: null,
+			seq: 1,
+			writerKey: remoteCore.key.toString("hex"),
+			blocks: { offset: append.length - 1, length: 1 },
+		};
+		await engine.getManifest().put("/join.txt", metadata);
+
+		return { engine, store, remoteCore, syncDir, localContent, remoteContent };
+	}
+
+	it("defaults to remote-wins for first-join same-path divergence", async () => {
+		const { engine, store, remoteCore, syncDir, remoteContent } = await setupJoinConflict();
+		try {
+			await engine.start();
+			await waitForCondition(async () => {
+				const content = await readFile(join(syncDir, "join.txt"), "utf-8");
+				return content === remoteContent;
+			});
+
+			const files = await readdir(syncDir);
+			expect(files.some((name) => name.startsWith("join.conflict-"))).toBe(false);
+		} finally {
+			await engine.close();
+			await remoteCore.close();
+			await store.close();
+		}
+	});
+
+	it("supports local-wins for first-join same-path divergence", async () => {
+		const { engine, store, remoteCore, syncDir, localContent } =
+			await setupJoinConflict("local-wins");
+		try {
+			await engine.start();
+			const localHash = createHash("sha256").update(localContent).digest("hex");
+			await waitForCondition(async () => {
+				const meta = await engine.getManifest().get("/join.txt");
+				return meta !== null && isFileMetadata(meta) && meta.hash === localHash;
+			});
+
+			const content = await readFile(join(syncDir, "join.txt"), "utf-8");
+			expect(content).toBe(localContent);
+
+			const meta = await engine.getManifest().get("/join.txt");
+			expect(meta).not.toBeNull();
+			expect(isFileMetadata(meta!)).toBe(true);
+			expect((meta as FileMetadata).writerKey).toBe(
+				engine.getFileStore().core.key.toString("hex"),
+			);
+		} finally {
+			await engine.close();
+			await remoteCore.close();
+			await store.close();
+		}
+	});
+
+	it("supports keep-both for first-join same-path divergence", async () => {
+		const { engine, store, remoteCore, syncDir, localContent, remoteContent } =
+			await setupJoinConflict("keep-both");
+		try {
+			await engine.start();
+			await waitForCondition(async () => {
+				const content = await readFile(join(syncDir, "join.txt"), "utf-8");
+				return content === remoteContent;
+			});
+
+			let conflictFile = "";
+			await waitForCondition(async () => {
+				const files = await readdir(syncDir);
+				const found = files.find((name) => name.startsWith("join.conflict-"));
+				if (!found) return false;
+				conflictFile = found;
+				return true;
+			});
+			const conflictContent = await readFile(join(syncDir, conflictFile), "utf-8");
+			expect(conflictContent).toBe(localContent);
+		} finally {
+			await engine.close();
+			await remoteCore.close();
+			await store.close();
+		}
+	});
 });
 
 describe("Reserved manifest key policy", () => {
