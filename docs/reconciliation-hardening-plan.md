@@ -102,3 +102,16 @@ Acceptance:
 1. No `as unknown as` casts for manifest values in sync path.
 2. Reserved path behavior is deterministic and documented.
 
+## Iteration 5: Multi-peer and restart resilience
+
+Add coverage for:
+
+1. Three-peer convergence (A/B/C) with updates from multiple writers.
+2. Late-join catch-up (new peer receives latest state including deletions/tombstones).
+3. Offline divergent edit + restart (manifest winner preserved, conflict copy created).
+4. Rapid update stream convergence (latest content wins consistently).
+
+Implementation note:
+
+1. In restricted environments that cannot bind UDX sockets (`EPERM`), these tests short-circuit instead of failing.
+2. On environments with testnet support, these tests run full end-to-end replication checks.
