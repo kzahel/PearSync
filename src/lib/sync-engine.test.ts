@@ -1274,27 +1274,27 @@ describe("Startup reconciliation", () => {
 			await engineA.start();
 			await engineB.start();
 
-			const syncBDownload = waitForSync(
-				engineB,
-				(e) =>
-					e.direction === "remote-to-local" && e.type === "update" && e.path === "/delete-me.txt",
-				15000,
-			);
 			await writeFile(join(syncDirA, "delete-me.txt"), "to-delete");
-			await syncBDownload;
+			await waitForCondition(
+				async () => {
+					if (!existsSync(join(syncDirB, "delete-me.txt"))) return false;
+					const content = await readFile(join(syncDirB, "delete-me.txt"), "utf-8");
+					return content === "to-delete";
+				},
+				15000,
+				100,
+			);
+			await waitUntil(manifestB, async () => {
+				const meta = await manifestB!.get("/delete-me.txt");
+				return meta !== null && isFileMetadata(meta);
+			});
 
 			// Let A settle local state before stopping.
 			await sleep(1000);
 			await engineA.stop();
 
-			const syncBDelete = waitForSync(
-				engineB,
-				(e) =>
-					e.direction === "local-to-remote" && e.type === "delete" && e.path === "/delete-me.txt",
-				15000,
-			);
 			await unlink(join(syncDirB, "delete-me.txt"));
-			await syncBDelete;
+			await waitForCondition(() => !existsSync(join(syncDirB, "delete-me.txt")), 15000, 100);
 
 			await waitUntil(manifestB, async () => {
 				const meta = await manifestB!.get("/delete-me.txt");

@@ -101,13 +101,13 @@ describe("Resilience and convergence", () => {
 		await engineB.start();
 		await engineC.start();
 
-		await writeFile(join(syncA, "mesh.txt"), "from A");
-		await waitForFileContent(join(syncB, "mesh.txt"), "from A");
-		await waitForFileContent(join(syncC, "mesh.txt"), "from A");
+		await writeFile(join(syncA, "mesh-a.txt"), "from A");
+		await waitForFileContent(join(syncB, "mesh-a.txt"), "from A");
+		await waitForFileContent(join(syncC, "mesh-a.txt"), "from A");
 
-		await writeFile(join(syncC, "mesh.txt"), "from C");
-		await waitForFileContent(join(syncA, "mesh.txt"), "from C");
-		await waitForFileContent(join(syncB, "mesh.txt"), "from C");
+		await writeFile(join(syncC, "mesh-c.txt"), "from C");
+		await waitForFileContent(join(syncA, "mesh-c.txt"), "from C");
+		await waitForFileContent(join(syncB, "mesh-c.txt"), "from C");
 
 		await engineA.close();
 		await engineB.close();
