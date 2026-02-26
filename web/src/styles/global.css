@@ -28,11 +28,32 @@
 }
 
 body {
+  --title-bar-height: 42px;
   background: var(--bg);
   color: var(--text);
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 14px;
   line-height: 1.5;
+  padding-top: var(--title-bar-height);
+}
+
+#title-bar {
+  -webkit-app-region: drag;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: var(--title-bar-height);
+  z-index: 100;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+
+#title-bar pear-ctrl[data-platform="darwin"] {
+  margin-top: 18px;
+  margin-left: 12px;
 }
 
 code,

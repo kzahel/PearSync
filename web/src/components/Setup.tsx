@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createInvite, pickFolder, previewSetup, type SetupPreviewResponse, setup } from "../api";
+import { pickFolder, previewSetup, type SetupPreviewResponse, setup } from "../api";
 import { runtime } from "../runtime";
 import styles from "./Setup.module.css";
 
@@ -16,8 +16,6 @@ export function Setup({ onComplete }: SetupProps) {
   >("remote-wins");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [generatedInvite, setGeneratedInvite] = useState("");
-  const [copied, setCopied] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [preview, setPreview] = useState<SetupPreviewResponse | null>(null);
   const handleBrowse = async () => {
@@ -48,12 +46,7 @@ export function Setup({ onComplete }: SetupProps) {
         inviteCode: mode === "join" ? inviteCode.trim() : undefined,
         startupConflictPolicy: mode === "join" ? startupConflictPolicy : undefined,
       });
-      if (mode === "create") {
-        const { inviteCode: code } = await createInvite();
-        setGeneratedInvite(code);
-      } else {
-        onComplete();
-      }
+      onComplete();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -87,34 +80,6 @@ export function Setup({ onComplete }: SetupProps) {
       setPreviewLoading(false);
     }
   };
-
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(generatedInvite);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  if (generatedInvite) {
-    return (
-      <div className={styles.container}>
-        <div className={styles.card}>
-          <h1 className={styles.title}>PearSync</h1>
-          <p className={styles.subtitle}>
-            Share this invite code with your other device. They have 10 minutes to enter it.
-          </p>
-          <div className={styles.inviteResult}>
-            <div className={styles.inviteCode}>{generatedInvite}</div>
-            <button type="button" className={styles.copyButton} onClick={handleCopy}>
-              {copied ? "Copied!" : "Copy to clipboard"}
-            </button>
-          </div>
-          <button type="button" className={styles.button} onClick={onComplete}>
-            Continue to Dashboard
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className={styles.container} data-testid="setup-screen">
