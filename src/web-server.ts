@@ -15,6 +15,7 @@ import { SyncEngine } from "./lib/sync-engine.js";
 export interface ServerOptions {
   folder?: string;
   port?: number;
+  bootstrap?: { host: string; port: number }[];
 }
 
 export interface PearSyncServer {
@@ -28,6 +29,7 @@ async function startEngine(
   folder: string,
   mode: "create" | "join",
   inviteCode: string | undefined,
+  bootstrap?: { host: string; port: number }[],
 ): Promise<{ engine: SyncEngine; store: InstanceType<typeof Corestore> }> {
   await mkdir(folder, { recursive: true });
   const storePath = join(folder, ".pearsync", "corestore");
@@ -36,9 +38,9 @@ async function startEngine(
 
   let manifest: ManifestStore;
   if (mode === "join" && inviteCode) {
-    manifest = await ManifestStore.pair(store, inviteCode);
+    manifest = await ManifestStore.pair(store, inviteCode, { bootstrap });
   } else {
-    manifest = ManifestStore.create(store);
+    manifest = ManifestStore.create(store, { bootstrap });
   }
 
   const engine = new SyncEngine(store, folder, { manifest });
@@ -66,7 +68,7 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
   // If folder provided, start engine immediately
   if (opts.folder) {
     resolvedFolder = resolveFolder(opts.folder);
-    const result = await startEngine(resolvedFolder, "create", undefined);
+    const result = await startEngine(resolvedFolder, "create", undefined, opts.bootstrap);
     engine = result.engine;
     store = result.store;
     bridge = new EngineBridge(engine, resolvedFolder);
@@ -117,7 +119,7 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
     }
     try {
       resolvedFolder = resolveFolder(folder);
-      const result = await startEngine(resolvedFolder, mode, inviteCode);
+      const result = await startEngine(resolvedFolder, mode, inviteCode, opts.bootstrap);
       engine = result.engine;
       store = result.store;
       bridge = new EngineBridge(engine, resolvedFolder);

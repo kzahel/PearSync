@@ -22,6 +22,7 @@
   "files": {
     "includes": [
       "src/**",
+      "scripts/**",
       "web/src/**",
       "*.json",
       "*.ts",
