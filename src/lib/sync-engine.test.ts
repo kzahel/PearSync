@@ -1189,3 +1189,79 @@ describe("Startup reconciliation", () => {
 		}
 	}, 60000);
 });
+
+describe("Reserved manifest key policy", () => {
+	it("does not materialize system manifest keys without leading slash", async () => {
+		const storeDir = await makeTmpDir();
+		const syncDir = await makeTmpDir("pearsync-folder-");
+
+		const store = new Corestore(storeDir);
+		const engine = new SyncEngine(store, syncDir);
+		await engine.ready();
+		await engine.start();
+
+		const remoteCore = store.get({ name: "remote-system-key-core" });
+		await remoteCore.ready();
+		const data = Buffer.from("internal");
+		const result = await remoteCore.append(data);
+		const offset = result.length - 1;
+
+		const metadata: FileMetadata = {
+			size: data.length,
+			mtime: Date.now(),
+			hash: createHash("sha256").update(data).digest("hex"),
+			writerKey: remoteCore.key.toString("hex"),
+			blocks: { offset, length: 1 },
+		};
+
+		let wroteSystemPath = false;
+		engine.on("sync", (event: SyncEvent) => {
+			if (
+				event.direction === "remote-to-local" &&
+				event.type === "update" &&
+				event.path === "__system-note"
+			) {
+				wroteSystemPath = true;
+			}
+		});
+
+		await engine.getManifest().put("__system-note", metadata);
+		await sleep(1000);
+
+		expect(wroteSystemPath).toBe(false);
+		expect(existsSync(join(syncDir, "__system-note"))).toBe(false);
+
+		await remoteCore.close();
+		await engine.close();
+		await store.close();
+	});
+
+	it("syncs user files whose names begin with __ after slash normalization", async () => {
+		const storeDir = await makeTmpDir();
+		const syncDir = await makeTmpDir("pearsync-folder-");
+
+		const store = new Corestore(storeDir);
+		const engine = new SyncEngine(store, syncDir);
+		await engine.ready();
+
+		const syncPromise = waitForSync(
+			engine,
+			(e) => e.direction === "local-to-remote" && e.type === "update" && e.path === "/__user.txt",
+			15000,
+		);
+		await engine.start();
+
+		await writeFile(join(syncDir, "__user.txt"), "user file");
+		await syncPromise;
+
+		const meta = await engine.getManifest().get("/__user.txt");
+		expect(meta).not.toBeNull();
+		expect(isTombstone(meta!)).toBe(false);
+		expect((meta as FileMetadata).hash).toBe(
+			createHash("sha256").update("user file").digest("hex"),
+		);
+
+		await engine.close();
+		await store.close();
+	});
+});
