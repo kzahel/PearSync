@@ -113,7 +113,7 @@ try {
   // Start remaining peers (joiners) — no folder so engine isn't auto-started
   for (let i = 1; i < peerCount; i++) {
     console.log(`Starting peer ${i} (joining)...`);
-    const serverI = await createServer({ bootstrap });
+    const serverI = await createServer({ bootstrap, autoStart: false });
     const portI = await serverI.listen(basePort + i);
     servers.push(serverI);
 

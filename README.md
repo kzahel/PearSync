@@ -150,6 +150,53 @@ PearSync and [Syncthing](https://github.com/syncthing/syncthing) solve the same 
 - Cryptographic identity baked in from the start (Autopass pairing)
 - Integration tests exercise the full stack (vs Syncthing's mock-heavy approach)
 
+## Local Config & Reset
+
+PearSync stores two things on disk:
+
+1. **App config** — remembers the last sync folder so it auto-starts on next launch
+2. **Sync data** — Hypercore storage and manifest inside the sync folder
+
+### Config file location
+
+| Platform | Path |
+|----------|------|
+| macOS | `~/.pearsync/config.json` |
+| Linux | `~/.pearsync/config.json` |
+| Windows | `%USERPROFILE%\.pearsync\config.json` |
+
+### Sync data location
+
+Inside your chosen sync folder: `<folder>/.pearsync/corestore/`
+
+### Reset to setup screen
+
+Delete the app config to force the setup screen on next launch:
+
+```sh
+# macOS / Linux
+rm ~/.pearsync/config.json
+
+# Windows (PowerShell)
+Remove-Item "$env:USERPROFILE\.pearsync\config.json"
+```
+
+### Full reset (remove all sync state)
+
+Delete both the app config and the sync data inside your folder:
+
+```sh
+# macOS / Linux
+rm ~/.pearsync/config.json
+rm -rf ~/YourSyncFolder/.pearsync
+
+# Windows (PowerShell)
+Remove-Item "$env:USERPROFILE\.pearsync\config.json"
+Remove-Item -Recurse -Force "$env:USERPROFILE\YourSyncFolder\.pearsync"
+```
+
+This does not delete your synced files — only the Hypercore storage and manifest. On next launch you'll go through setup again.
+
 ## License
 
 Apache-2.0
