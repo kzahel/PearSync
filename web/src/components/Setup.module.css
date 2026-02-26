@@ -48,6 +48,31 @@
   outline-offset: -1px;
 }
 
+.folderRow {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.folderRow .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.browseBtn {
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.browseBtn:hover {
+  background: var(--border);
+}
+
 .radioGroup {
   display: flex;
   gap: 1.5rem;

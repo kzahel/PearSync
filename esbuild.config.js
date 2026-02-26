@@ -1,8 +1,15 @@
 import { build } from "esbuild";
 
-// Build lib (sync engine, runs in Pear main process)
+// Build lib (sync engine + engine manager, runs in Pear main process)
 await build({
-  entryPoints: ["src/lib/sync-engine.ts", "src/lib/file-utils.ts"],
+  entryPoints: [
+    "src/lib/sync-engine.ts",
+    "src/lib/file-utils.ts",
+    "src/engine-manager.ts",
+    "src/engine-bridge.ts",
+    "src/ring-buffer.ts",
+    "src/api-types.ts",
+  ],
   outdir: "lib",
   format: "esm",
   platform: "node",

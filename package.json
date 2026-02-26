@@ -6,7 +6,7 @@
     "pre": "pear-electron/pre",
     "name": "pearsync",
     "gui": {
-      "main": "ui/index.html",
+      "main": "web/dist/index.html",
       "backgroundColor": "#0f1117",
       "width": 1100,
       "height": 700,

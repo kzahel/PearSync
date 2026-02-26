@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createInvite, setup } from "../api";
+import { runtime } from "../runtime";
 import styles from "./Setup.module.css";
 
 interface SetupProps {
@@ -17,6 +18,29 @@ export function Setup({ onComplete }: SetupProps) {
   const [error, setError] = useState("");
   const [generatedInvite, setGeneratedInvite] = useState("");
   const [copied, setCopied] = useState(false);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
+  const handleBrowse = () => {
+    folderInputRef.current?.click();
+  };
+
+  const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    // In Pear/Electron, File objects have a .path property with the absolute path.
+    const firstFile = files[0] as File & { path?: string };
+    if (firstFile.path) {
+      const relativePath = firstFile.webkitRelativePath;
+      const folderName = relativePath.split("/")[0];
+      const absolutePath = firstFile.path;
+      const idx = absolutePath.lastIndexOf(folderName);
+      if (idx >= 0) {
+        setFolder(absolutePath.substring(0, idx + folderName.length));
+      } else {
+        setFolder(absolutePath.substring(0, absolutePath.lastIndexOf("/")));
+      }
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,14 +111,31 @@ export function Setup({ onComplete }: SetupProps) {
           <label className={styles.label} htmlFor="folder">
             Folder path
           </label>
-          <input
-            id="folder"
-            className={styles.input}
-            type="text"
-            value={folder}
-            onChange={(e) => setFolder(e.target.value)}
-            placeholder="~/PearSync"
-          />
+          <div className={styles.folderRow}>
+            <input
+              id="folder"
+              className={styles.input}
+              type="text"
+              value={folder}
+              onChange={(e) => setFolder(e.target.value)}
+              placeholder="~/PearSync"
+            />
+            {runtime.canPickFolder && (
+              <>
+                <button type="button" className={styles.browseBtn} onClick={handleBrowse}>
+                  Browse
+                </button>
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  // @ts-expect-error webkitdirectory is not in React's type definitions
+                  webkitdirectory=""
+                  style={{ display: "none" }}
+                  onChange={handleFolderSelect}
+                />
+              </>
+            )}
+          </div>
 
           <span className={styles.label}>Mode</span>
           <div className={styles.radioGroup}>

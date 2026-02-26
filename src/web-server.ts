@@ -3,13 +3,26 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import Corestore from "corestore";
+import type Corestore from "corestore";
 import express from "express";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { StartupConflictPolicy } from "./api-types.js";
 import { EngineBridge } from "./engine-bridge.js";
 import { resolveFolder, startEngine, startupConflictPolicies } from "./engine-manager.js";
 import type { SyncEngine } from "./lib/sync-engine.js";
+
+export interface ServerOptions {
+  folder?: string;
+  port?: number;
+  bootstrap?: { host: string; port: number }[];
+}
+
+export interface PearSyncServer {
+  listen(port: number): Promise<number>;
+  close(): Promise<void>;
+  url: string;
+  httpServer: http.Server;
+}
 
 export async function createServer(opts: ServerOptions): Promise<PearSyncServer> {
   const app = express();
