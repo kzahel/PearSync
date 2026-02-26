@@ -16,12 +16,15 @@ import {
   startEngineFromPreparedJoin,
   startupConflictPolicies,
 } from "./engine-manager.js";
+import { loadLastFolder, saveLastFolder } from "./last-folder-config.js";
 import type { SyncEngine } from "./lib/sync-engine.js";
 
 export interface ServerOptions {
   folder?: string;
   port?: number;
   bootstrap?: { host: string; port: number }[];
+  /** If false, skip auto-starting from saved config when no folder is provided. Default: true. */
+  autoStart?: boolean;
 }
 
 export interface PearSyncServer {
@@ -49,15 +52,24 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
     pendingJoinPreview = null;
   }
 
-  // If folder provided, start engine immediately
-  if (opts.folder) {
-    resolvedFolder = resolveFolder(opts.folder);
-    const result = await startEngine(resolvedFolder, "create", undefined, opts.bootstrap);
-    engine = result.engine;
-    store = result.store;
-    currentStartupConflictPolicy = result.startupConflictPolicy;
-    bridge = new EngineBridge(engine, resolvedFolder, currentStartupConflictPolicy);
-    bridge.attach();
+  // If folder provided, start engine immediately; otherwise try saved config
+  const folderToStart = opts.folder ?? (opts.autoStart !== false ? loadLastFolder() : null);
+  if (folderToStart) {
+    try {
+      resolvedFolder = resolveFolder(folderToStart);
+      const result = await startEngine(resolvedFolder, "create", undefined, opts.bootstrap);
+      engine = result.engine;
+      store = result.store;
+      currentStartupConflictPolicy = result.startupConflictPolicy;
+      bridge = new EngineBridge(engine, resolvedFolder, currentStartupConflictPolicy);
+      bridge.attach();
+    } catch (err) {
+      console.error("[auto-start] Failed to restore previous session:", err);
+      engine = null;
+      bridge = null;
+      store = null;
+      resolvedFolder = null;
+    }
   }
 
   const httpServer = http.createServer(app);
@@ -141,6 +153,7 @@ export async function createServer(opts: ServerOptions): Promise<PearSyncServer>
       for (const ws of wss.clients) {
         bridge.addWsClient(ws as WebSocket);
       }
+      saveLastFolder(resolvedFolder);
       res.json({ ok: true, writerKey: engine.getManifest().writerKey });
     } catch (err) {
       await clearPendingJoinPreview();

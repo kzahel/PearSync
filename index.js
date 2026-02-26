@@ -5,6 +5,7 @@ import { spawn as spawnProcess } from 'bare-subprocess'
 import os from 'bare-os'
 import { startEngine, resolveFolder, startupConflictPolicies } from './lib/engine-manager.js'
 import { EngineBridge } from './lib/engine-bridge.js'
+import { saveLastFolder, loadLastFolder } from './lib/last-folder-config.js'
 
 Pear.updates((update) => {
   console.log('Application update available:', update)
@@ -107,6 +108,7 @@ async function handleRequest (method, path, body, query) {
       pipeLog('>>', `push:${msg.type}`)
       pipeSend(msg)
     })
+    saveLastFolder(resolvedFolder)
     return { ok: true, writerKey: engine.getManifest().writerKey }
   }
 
@@ -189,4 +191,29 @@ function pickFolder () {
       resolve({ folder })
     })
   })
+}
+
+// Auto-start from saved config
+const savedFolder = loadLastFolder()
+if (savedFolder) {
+  try {
+    resolvedFolder = resolveFolder(savedFolder)
+    const result = await startEngine(resolvedFolder, 'create')
+    engine = result.engine
+    store = result.store
+    currentStartupConflictPolicy = result.startupConflictPolicy
+    engineBridge = new EngineBridge(engine, resolvedFolder, currentStartupConflictPolicy)
+    engineBridge.attach()
+    removePushListener = engineBridge.addPushListener((msg) => {
+      pipeLog('>>', `push:${msg.type}`)
+      pipeSend(msg)
+    })
+    console.log('[auto-start] Restored sync folder:', resolvedFolder)
+  } catch (err) {
+    console.error('[auto-start] Failed to restore previous session:', err.message)
+    engine = null
+    engineBridge = null
+    store = null
+    resolvedFolder = null
+  }
 }

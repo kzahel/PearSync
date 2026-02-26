@@ -15,7 +15,7 @@ async function makeTmpDir(): Promise<string> {
 }
 
 async function makeServer(folder?: string): Promise<PearSyncServer> {
-  const server = await createServer({ folder });
+  const server = await createServer({ folder, autoStart: false });
   await server.listen(0);
   servers.push(server);
   return server;

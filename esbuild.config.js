@@ -30,6 +30,7 @@ await build({
     "src/engine-bridge.ts",
     "src/ring-buffer.ts",
     "src/api-types.ts",
+    "src/last-folder-config.ts",
   ],
   outbase: "src",
 });
@@ -51,6 +52,7 @@ const nodeToBareMappings = [
   ['"node:crypto"', '"bare-crypto"'],
   ['"node:events"', '"bare-events"'],
   ['"node:fs/promises"', '"bare-fs/promises"'],
+  ['"node:fs"', '"bare-fs"'],
   ['"node:os"', '"bare-os"'],
   ['"node:path"', '"bare-path"'],
   // Fix cross-references: src/engine-*.ts import from ./lib/*.js but output is flat
