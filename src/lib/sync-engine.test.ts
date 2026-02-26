@@ -1013,3 +1013,179 @@ describe("Deletion propagation", () => {
 		await store.close();
 	});
 });
+
+describe("Startup reconciliation", () => {
+	it("does not roll back remote update after local downtime", async () => {
+		let tn: Awaited<ReturnType<typeof testnet>> | null = null;
+		let storeA: Corestore | null = null;
+		let storeB: Corestore | null = null;
+		let manifestA: ManifestStore | null = null;
+		let manifestB: ManifestStore | null = null;
+		let engineA: SyncEngine | null = null;
+		let engineB: SyncEngine | null = null;
+		let syncDirA = "";
+		let syncDirB = "";
+
+		try {
+			tn = await testnet(10);
+
+			const storeDirA = await makeTmpDir();
+			syncDirA = await makeTmpDir("pearsync-folderA-");
+			const storeDirB = await makeTmpDir();
+			syncDirB = await makeTmpDir("pearsync-folderB-");
+
+			storeA = new Corestore(storeDirA);
+			storeB = new Corestore(storeDirB);
+
+			manifestA = ManifestStore.create(storeA, { bootstrap: tn.bootstrap });
+			await manifestA.ready();
+			const invite = await manifestA.createInvite();
+			manifestB = await ManifestStore.pair(storeB, invite, { bootstrap: tn.bootstrap });
+			await waitForMembers(manifestA, manifestB);
+
+			engineA = new SyncEngine(storeA, syncDirA, { manifest: manifestA });
+			engineB = new SyncEngine(storeB, syncDirB, { manifest: manifestB });
+			await engineA.ready();
+			await engineB.ready();
+			await engineA.start();
+			await engineB.start();
+
+			const syncBDownload = waitForSync(
+				engineB,
+				(e) => e.direction === "remote-to-local" && e.type === "update" && e.path === "/doc.txt",
+				15000,
+			);
+			await writeFile(join(syncDirA, "doc.txt"), "v1");
+			await syncBDownload;
+
+			// Let A settle local state before stopping.
+			await sleep(1000);
+			await engineA.stop();
+
+			const syncBUpload = waitForSync(
+				engineB,
+				(e) => e.direction === "local-to-remote" && e.type === "update" && e.path === "/doc.txt",
+				15000,
+			);
+			await writeFile(join(syncDirB, "doc.txt"), "v2");
+			await syncBUpload;
+
+			const v2Hash = createHash("sha256").update("v2").digest("hex");
+			await waitUntil(manifestB, async () => {
+				const meta = await manifestB!.get("/doc.txt");
+				return meta !== null && !isTombstone(meta) && meta.hash === v2Hash;
+			});
+			await waitUntil(manifestA, async () => {
+				const meta = await manifestA!.get("/doc.txt");
+				return meta !== null && !isTombstone(meta) && meta.hash === v2Hash;
+			});
+
+			await engineA.start();
+			await sleep(2500);
+
+			const contentA = await readFile(join(syncDirA, "doc.txt"), "utf-8");
+			const contentB = await readFile(join(syncDirB, "doc.txt"), "utf-8");
+
+			expect(contentA).toBe("v2");
+			expect(contentB).toBe("v2");
+		} finally {
+			if (engineA) await engineA.close();
+			if (engineB) await engineB.close();
+			if (manifestA) await manifestA.close();
+			if (manifestB) await manifestB.close();
+			if (storeA) await storeA.close();
+			if (storeB) await storeB.close();
+			if (tn) {
+				for (const node of tn.nodes) await node.destroy();
+			}
+		}
+	}, 60000);
+
+	it("applies remote tombstone on restart when local file is unchanged", async () => {
+		let tn: Awaited<ReturnType<typeof testnet>> | null = null;
+		let storeA: Corestore | null = null;
+		let storeB: Corestore | null = null;
+		let manifestA: ManifestStore | null = null;
+		let manifestB: ManifestStore | null = null;
+		let engineA: SyncEngine | null = null;
+		let engineB: SyncEngine | null = null;
+		let syncDirA = "";
+		let syncDirB = "";
+
+		try {
+			tn = await testnet(10);
+
+			const storeDirA = await makeTmpDir();
+			syncDirA = await makeTmpDir("pearsync-folderA-");
+			const storeDirB = await makeTmpDir();
+			syncDirB = await makeTmpDir("pearsync-folderB-");
+
+			storeA = new Corestore(storeDirA);
+			storeB = new Corestore(storeDirB);
+
+			manifestA = ManifestStore.create(storeA, { bootstrap: tn.bootstrap });
+			await manifestA.ready();
+			const invite = await manifestA.createInvite();
+			manifestB = await ManifestStore.pair(storeB, invite, { bootstrap: tn.bootstrap });
+			await waitForMembers(manifestA, manifestB);
+
+			engineA = new SyncEngine(storeA, syncDirA, { manifest: manifestA });
+			engineB = new SyncEngine(storeB, syncDirB, { manifest: manifestB });
+			await engineA.ready();
+			await engineB.ready();
+			await engineA.start();
+			await engineB.start();
+
+			const syncBDownload = waitForSync(
+				engineB,
+				(e) =>
+					e.direction === "remote-to-local" && e.type === "update" && e.path === "/delete-me.txt",
+				15000,
+			);
+			await writeFile(join(syncDirA, "delete-me.txt"), "to-delete");
+			await syncBDownload;
+
+			// Let A settle local state before stopping.
+			await sleep(1000);
+			await engineA.stop();
+
+			const syncBDelete = waitForSync(
+				engineB,
+				(e) =>
+					e.direction === "local-to-remote" && e.type === "delete" && e.path === "/delete-me.txt",
+				15000,
+			);
+			await unlink(join(syncDirB, "delete-me.txt"));
+			await syncBDelete;
+
+			await waitUntil(manifestB, async () => {
+				const meta = await manifestB!.get("/delete-me.txt");
+				return meta !== null && isTombstone(meta);
+			});
+			await waitUntil(manifestA, async () => {
+				const meta = await manifestA!.get("/delete-me.txt");
+				return meta !== null && isTombstone(meta);
+			});
+
+			await engineA.start();
+			await sleep(2500);
+
+			expect(existsSync(join(syncDirA, "delete-me.txt"))).toBe(false);
+			expect(existsSync(join(syncDirB, "delete-me.txt"))).toBe(false);
+
+			const metaA = await manifestA.get("/delete-me.txt");
+			expect(metaA).not.toBeNull();
+			expect(isTombstone(metaA!)).toBe(true);
+		} finally {
+			if (engineA) await engineA.close();
+			if (engineB) await engineB.close();
+			if (manifestA) await manifestA.close();
+			if (manifestB) await manifestB.close();
+			if (storeA) await storeA.close();
+			if (storeB) await storeB.close();
+			if (tn) {
+				for (const node of tn.nodes) await node.destroy();
+			}
+		}
+	}, 60000);
+});

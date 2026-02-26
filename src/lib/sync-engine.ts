@@ -486,6 +486,9 @@ export class SyncEngine extends EventEmitter {
 		const fileStore = this.fileStore!;
 		const manifest = this.manifest!;
 
+		// Reconcile remote state first so a restarting peer does not re-upload stale local files.
+		await this.handleRemoteChanges();
+
 		for await (const entry of drive.list("/")) {
 			if (entry.key.startsWith("/.pearsync/")) continue;
 
@@ -528,8 +531,6 @@ export class SyncEngine extends EventEmitter {
 				path: entry.key,
 			} satisfies SyncEvent);
 		}
-
-		await this.handleRemoteChanges();
 	}
 
 	getManifest(): ManifestStore {
