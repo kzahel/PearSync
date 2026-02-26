@@ -87,6 +87,8 @@ function buildMetadata(
 		size: stored.size,
 		mtime: Date.now(),
 		hash: stored.hash,
+		baseHash: null,
+		seq: 1,
 		writerKey: coreKey.toString("hex"),
 		blocks: {
 			offset: stored.offset,

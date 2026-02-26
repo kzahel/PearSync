@@ -16,10 +16,14 @@ async function makeTmpDir(): Promise<string> {
 }
 
 function makeMetadata(overrides?: Partial<FileMetadata>): FileMetadata {
+  const baseHash = overrides?.baseHash ?? null;
+  const seq = overrides?.seq ?? 1;
   return {
     size: 1024,
     mtime: Date.now(),
     hash: "a".repeat(64),
+    baseHash,
+    seq,
     writerKey: "b".repeat(64),
     blocks: { offset: 0, length: 2 },
     ...overrides,

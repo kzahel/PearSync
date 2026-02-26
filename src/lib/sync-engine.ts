@@ -200,11 +200,19 @@ export class SyncEngine extends EventEmitter {
 			if (manifestValue && !isTombstone(manifestValue) && manifestValue.hash === hash) return;
 
 			const stored = await fileStore.writeFile(data);
+			const baseHash = manifestValue
+				? isTombstone(manifestValue)
+					? manifestValue.baseHash
+					: manifestValue.hash
+				: null;
+			const seq = manifestValue ? manifestValue.seq + 1 : 1;
 
 			const metadata: FileMetadata = {
 				size: stored.size,
 				mtime,
 				hash: stored.hash,
+				baseHash,
+				seq,
 				writerKey: fileStore.core.key.toString("hex"),
 				blocks: { offset: stored.offset, length: stored.length },
 			};
@@ -227,7 +235,10 @@ export class SyncEngine extends EventEmitter {
 			const manifestValue = await manifest.get(key);
 			if (manifestValue && !isTombstone(manifestValue)) {
 				// Write tombstone instead of remove()
-				await manifest.putTombstone(key, fileStore.core.key.toString("hex"));
+				await manifest.putTombstone(key, fileStore.core.key.toString("hex"), {
+					baseHash: manifestValue.hash,
+					seq: manifestValue.seq + 1,
+				});
 				await this.localState.remove(key);
 				this.emit("sync", {
 					direction: "local-to-remote",
@@ -296,23 +307,33 @@ export class SyncEngine extends EventEmitter {
 			return;
 		}
 
-		// Case 4: Check if this is a new remote version
 		const remoteChanged = remote.hash !== tracked.lastManifestHash;
-		const localChanged = localHash !== tracked.lastSyncedHash;
+		if (!remoteChanged) return;
 
-		if (remoteChanged && localChanged) {
-			// CONFLICT: both sides changed
-			await this.handleConflict(path, remote, localData);
-		} else if (remoteChanged) {
-			// Only remote changed → download
+		const localChanged = localHash !== tracked.lastSyncedHash;
+		if (!localChanged) {
 			await this.downloadFile(path, remote);
 			this.emit("sync", {
 				direction: "remote-to-local",
 				type: "update",
 				path,
 			} satisfies SyncEvent);
+			return;
 		}
-		// If only local changed (or neither), do nothing — local upload will handle it
+
+		// If remote is based directly on our local content, this is a fast-forward.
+		if (remote.baseHash !== null && remote.baseHash === localHash) {
+			await this.downloadFile(path, remote);
+			this.emit("sync", {
+				direction: "remote-to-local",
+				type: "update",
+				path,
+			} satisfies SyncEvent);
+			return;
+		}
+
+		// Divergence: both sides changed from different bases.
+		await this.handleConflict(path, remote, localData);
 	}
 
 	private async handleConflict(
@@ -320,40 +341,17 @@ export class SyncEngine extends EventEmitter {
 		remote: FileMetadata,
 		localData: Buffer,
 	): Promise<void> {
-		const localEntry = await this.drive!.entry(path);
-		const localMtime = localEntry?.mtime ?? 0;
-
-		// Winner = highest mtime. Tie-break: remote wins (it's already in the manifest).
-		const remoteWins = remote.mtime >= localMtime;
-
-		// Build conflict copy filename
-		const loserWriterKey = remoteWins
-			? this.fileStore!.core.key.toString("hex")
-			: remote.writerKey;
+		// Manifest winner is authoritative for the canonical path.
+		const loserWriterKey = this.fileStore!.core.key.toString("hex");
 		const peerName = await this.getPeerName(loserWriterKey);
 		const conflictPath = buildConflictPath(path, peerName);
 
-		if (remoteWins) {
-			// Save local version as conflict copy
-			this.suppressedPaths.add(conflictPath);
-			await this.drive!.put(conflictPath, localData);
+		// Save local version as conflict copy.
+		this.suppressedPaths.add(conflictPath);
+		await this.drive!.put(conflictPath, localData);
 
-			// Download remote version to original path
-			await this.downloadFile(path, remote);
-		} else {
-			// Local wins — download remote version as conflict copy
-			const remoteData = await this.fetchRemoteFile(remote);
-			this.suppressedPaths.add(conflictPath);
-			await this.drive!.put(conflictPath, remoteData);
-
-			// Update state to reflect that we've seen this manifest version
-			await this.localState.set(path, {
-				lastSyncedHash: createHash("sha256").update(localData).digest("hex"),
-				lastSyncedMtime: localMtime,
-				lastManifestHash: remote.hash,
-				lastManifestWriterKey: remote.writerKey,
-			});
-		}
+		// Apply manifest winner at canonical path.
+		await this.downloadFile(path, remote);
 
 		this.emit("sync", {
 			direction: "remote-to-local",
@@ -373,6 +371,7 @@ export class SyncEngine extends EventEmitter {
 
 		// If we have no record of this file, it's either already gone or never existed locally
 		if (!tracked) return;
+		if (tombstone.baseHash !== tracked.lastSyncedHash) return;
 
 		// Check if local file was modified since last sync
 		const localData = await this.drive!.get(path);
@@ -513,6 +512,12 @@ export class SyncEngine extends EventEmitter {
 				size: stored.size,
 				mtime: entry.mtime,
 				hash: stored.hash,
+				baseHash: existing
+					? isTombstone(existing)
+						? existing.baseHash
+						: existing.hash
+					: null,
+				seq: existing ? existing.seq + 1 : 1,
 				writerKey: fileStore.core.key.toString("hex"),
 				blocks: { offset: stored.offset, length: stored.length },
 			};

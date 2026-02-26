@@ -6,6 +6,8 @@ export interface FileMetadata {
   size: number;
   mtime: number;
   hash: string;
+  baseHash: string | null;
+  seq: number;
   writerKey: string;
   blocks: {
     offset: number;
@@ -17,6 +19,8 @@ export interface TombstoneMetadata {
   deleted: true;
   mtime: number;
   writerKey: string;
+  baseHash: string | null;
+  seq: number;
 }
 
 export type ManifestValue = FileMetadata | TombstoneMetadata;
@@ -67,11 +71,31 @@ export class ManifestStore extends EventEmitter {
     await this.pass.add(path, JSON.stringify(metadata));
   }
 
-  async putTombstone(path: string, writerKey: string): Promise<void> {
+  async putTombstone(
+    path: string,
+    writerKey: string,
+    opts?: {
+      baseHash?: string | null;
+      seq?: number;
+      mtime?: number;
+    },
+  ): Promise<void> {
+    const existing = await this.get(path);
+    const baseHash =
+      opts?.baseHash ??
+      (existing
+        ? isTombstone(existing)
+          ? existing.baseHash
+          : existing.hash
+        : null);
+    const seq = opts?.seq ?? (existing ? existing.seq + 1 : 1);
+
     const tombstone: TombstoneMetadata = {
       deleted: true,
-      mtime: Date.now(),
+      mtime: opts?.mtime ?? Date.now(),
       writerKey,
+      baseHash,
+      seq,
     };
     await this.put(path, tombstone);
   }
