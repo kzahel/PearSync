@@ -1,8 +1,12 @@
-Built with https://yepanywhere.com/
+Built with https://yepanywhere.com/ | [Development sessions](sessions/sessions.md) | `pear://8uoa15afjg5zft9g17je4z1ijn1skfoitqexb35nszptcjkeuq8o`
 
 # PearSync
 
 Peer-to-peer folder sync built on the [Holepunch](https://holepunch.to/) stack. Two or more peers share a folder over encrypted, append-only Hypercores — no central server required.
+
+## Demo
+
+[![PearSync demo](https://img.youtube.com/vi/1qjCk4APonA/maxresdefault.jpg)](https://www.youtube.com/watch?v=1qjCk4APonA)
 
 ## Architecture
 

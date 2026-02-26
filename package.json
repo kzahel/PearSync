@@ -1,6 +1,5 @@
 {
   "name": "holepu",
-  "main": "index.js",
   "type": "module",
   "pear": {
     "pre": "pear-electron/pre",
