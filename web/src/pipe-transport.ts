@@ -66,11 +66,12 @@ export class PipeTransport implements Transport {
   private onRawData = (raw: unknown) => {
     const chunk = typeof raw === "string" ? raw : Buffer.from(raw as Uint8Array).toString();
     this.buf += chunk;
-    let nl: number;
-    while ((nl = this.buf.indexOf("\n")) !== -1) {
+    let nl: number = this.buf.indexOf("\n");
+    while (nl !== -1) {
       const line = this.buf.slice(0, nl);
       this.buf = this.buf.slice(nl + 1);
       if (line) this.handleMessage(line);
+      nl = this.buf.indexOf("\n");
     }
   };
 
@@ -114,7 +115,7 @@ export class PipeTransport implements Transport {
       }, PipeTransport.REQUEST_TIMEOUT_MS);
       this.pending.set(request.id, { resolve, reject, timer });
       log(">>", `#${request.id} ${request.method.toUpperCase()} ${request.params.path}`);
-      this.pipe.write(JSON.stringify(request) + "\n");
+      this.pipe.write(`${JSON.stringify(request)}\n`);
     });
   }
 
