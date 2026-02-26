@@ -6,8 +6,7 @@ import Corestore from "corestore";
 import testnet from "hyperdht/testnet";
 import { afterEach, describe, expect, it } from "vitest";
 import { FileStore } from "./file-store";
-import type { FileMetadata } from "./manifest-store";
-import { ManifestStore } from "./manifest-store";
+import { type FileMetadata, type ManifestValue, ManifestStore } from "./manifest-store";
 
 let tmpDirs: string[] = [];
 
@@ -102,14 +101,18 @@ async function readRemoteFile(
 	metadata: FileMetadata,
 ): Promise<Buffer> {
 	const remoteCore = store.get({ key: Buffer.from(metadata.writerKey, "hex") });
-	await remoteCore.ready();
+	try {
+		await remoteCore.ready();
 
-	const blocks: Buffer[] = [];
-	for (let i = 0; i < metadata.blocks.length; i++) {
-		const block = await remoteCore.get(metadata.blocks.offset + i);
-		blocks.push(block!);
+		const blocks: Buffer[] = [];
+		for (let i = 0; i < metadata.blocks.length; i++) {
+			const block = await remoteCore.get(metadata.blocks.offset + i);
+			blocks.push(block!);
+		}
+		return Buffer.concat(blocks);
+	} finally {
+		await remoteCore.close();
 	}
-	return Buffer.concat(blocks);
 }
 
 describe("Layer 3 — local replication integration", () => {
@@ -140,7 +143,7 @@ describe("Layer 3 — local replication integration", () => {
 		const entry = await manifestB.get("/hello.txt");
 		expect(entry).not.toBeNull();
 
-		const fileData = await readRemoteFile(storeB, entry!);
+		const fileData = await readRemoteFile(storeB, entry! as FileMetadata);
 		expect(fileData.equals(data)).toBe(true);
 
 		await fileStoreA.close();
@@ -169,7 +172,7 @@ describe("Layer 3 — local replication integration", () => {
 		const entry = await manifestA.get("/from-b.txt");
 		expect(entry).not.toBeNull();
 
-		const fileData = await readRemoteFile(storeA, entry!);
+		const fileData = await readRemoteFile(storeA, entry! as FileMetadata);
 		expect(fileData.equals(data)).toBe(true);
 
 		await fileStoreA.close();
@@ -201,7 +204,7 @@ describe("Layer 3 — local replication integration", () => {
 		for (const f of files) {
 			const entry = await manifestB.get(f.path);
 			expect(entry).not.toBeNull();
-			const fileData = await readRemoteFile(storeB, entry!);
+			const fileData = await readRemoteFile(storeB, entry! as FileMetadata);
 			expect(fileData.equals(f.data)).toBe(true);
 		}
 
@@ -232,7 +235,7 @@ describe("Layer 3 — local replication integration", () => {
 		const entry = await manifestB.get("/large.bin");
 		expect(entry).not.toBeNull();
 
-		const fileData = await readRemoteFile(storeB, entry!);
+		const fileData = await readRemoteFile(storeB, entry! as FileMetadata);
 		expect(fileData.length).toBe(data.length);
 		expect(fileData.equals(data)).toBe(true);
 
@@ -269,13 +272,13 @@ describe("Layer 3 — local replication integration", () => {
 		// B reads A's file
 		const entryX = await manifestB.get("/x.txt");
 		expect(entryX).not.toBeNull();
-		const fileDataX = await readRemoteFile(storeB, entryX!);
+		const fileDataX = await readRemoteFile(storeB, entryX! as FileMetadata);
 		expect(fileDataX.equals(dataX)).toBe(true);
 
 		// A reads B's file
 		const entryY = await manifestA.get("/y.txt");
 		expect(entryY).not.toBeNull();
-		const fileDataY = await readRemoteFile(storeA, entryY!);
+		const fileDataY = await readRemoteFile(storeA, entryY! as FileMetadata);
 		expect(fileDataY.equals(dataY)).toBe(true);
 
 		await fileStoreA.close();
@@ -300,7 +303,7 @@ describe("Layer 3 — local replication integration", () => {
 		await waitUntil(manifestB, async () => (await manifestB.get("/ephemeral.txt")) !== null);
 		const entry = await manifestB.get("/ephemeral.txt");
 		expect(entry).not.toBeNull();
-		const fileDataBefore = await readRemoteFile(storeB, entry!);
+		const fileDataBefore = await readRemoteFile(storeB, entry! as FileMetadata);
 		expect(fileDataBefore.equals(data)).toBe(true);
 
 		// A removes the manifest entry
@@ -311,7 +314,7 @@ describe("Layer 3 — local replication integration", () => {
 		expect(await manifestB.get("/ephemeral.txt")).toBeNull();
 
 		// B can still read the file blocks — Hypercore is append-only
-		const fileDataAfter = await readRemoteFile(storeB, entry!);
+		const fileDataAfter = await readRemoteFile(storeB, entry! as FileMetadata);
 		expect(fileDataAfter.equals(data)).toBe(true);
 
 		await fileStoreA.close();

@@ -13,9 +13,21 @@ export interface FileMetadata {
   };
 }
 
+export interface TombstoneMetadata {
+  deleted: true;
+  mtime: number;
+  writerKey: string;
+}
+
+export type ManifestValue = FileMetadata | TombstoneMetadata;
+
+export function isTombstone(value: ManifestValue): value is TombstoneMetadata {
+  return "deleted" in value && value.deleted === true;
+}
+
 export interface ManifestEntry {
   path: string;
-  metadata: FileMetadata;
+  metadata: ManifestValue;
 }
 
 export interface ManifestStoreOptions {
@@ -51,21 +63,30 @@ export class ManifestStore extends EventEmitter {
     await this.pass.close();
   }
 
-  async put(path: string, metadata: FileMetadata): Promise<void> {
+  async put(path: string, metadata: ManifestValue): Promise<void> {
     await this.pass.add(path, JSON.stringify(metadata));
   }
 
-  async get(path: string): Promise<FileMetadata | null> {
+  async putTombstone(path: string, writerKey: string): Promise<void> {
+    const tombstone: TombstoneMetadata = {
+      deleted: true,
+      mtime: Date.now(),
+      writerKey,
+    };
+    await this.put(path, tombstone);
+  }
+
+  async get(path: string): Promise<ManifestValue | null> {
     const result = await this.pass.get(path);
     if (result === null) return null;
-    return JSON.parse(result.value) as FileMetadata;
+    return JSON.parse(result.value) as ManifestValue;
   }
 
   async list(): Promise<ManifestEntry[]> {
     const records = await this.pass.list().toArray();
     return records.map((record) => ({
       path: record.key,
-      metadata: JSON.parse(record.value) as FileMetadata,
+      metadata: JSON.parse(record.value) as ManifestValue,
     }));
   }
 

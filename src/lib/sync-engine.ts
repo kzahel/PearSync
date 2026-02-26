@@ -1,20 +1,49 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import type { FSWatcher, PathLike, WatchListener, WatchOptions } from "node:fs";
+import { createRequire } from "node:module";
 import Localdrive from "localdrive";
 import watch from "watch-drive";
 import type Corestore from "corestore";
 import { FileStore } from "./file-store";
-import { type FileMetadata, ManifestStore } from "./manifest-store";
+import { LocalStateStore } from "./local-state-store";
+import {
+	type FileMetadata,
+	type ManifestValue,
+	type TombstoneMetadata,
+	ManifestStore,
+	isTombstone,
+} from "./manifest-store";
+
+const require = createRequire(import.meta.url);
+const mutableFs = require("node:fs") as typeof import("node:fs") & {
+	__pearsyncWatchPatched?: boolean;
+};
 
 export interface SyncEvent {
 	direction: "local-to-remote" | "remote-to-local";
-	type: "update" | "delete";
+	type: "update" | "delete" | "conflict";
 	path: string;
+	conflictPath?: string;
 }
 
 export interface SyncEngineOptions {
 	bootstrap?: { host: string; port: number }[];
 	manifest?: ManifestStore;
+}
+
+export function buildConflictPath(originalPath: string, peerName: string): string {
+	const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+	const lastDot = originalPath.lastIndexOf(".");
+	const lastSlash = originalPath.lastIndexOf("/");
+
+	// Dot must be after the last slash to be a real extension
+	if (lastDot > lastSlash + 1) {
+		const stem = originalPath.slice(0, lastDot);
+		const ext = originalPath.slice(lastDot);
+		return `${stem}.conflict-${date}-${peerName}${ext}`;
+	}
+	return `${originalPath}.conflict-${date}-${peerName}`;
 }
 
 export class SyncEngine extends EventEmitter {
@@ -25,7 +54,10 @@ export class SyncEngine extends EventEmitter {
 	private manifest: ManifestStore | null = null;
 	private ownsManifest: boolean;
 	private watcher: ReturnType<typeof watch> | null = null;
+	private localChangeQueue: Promise<void> = Promise.resolve();
+	private remoteUpdateQueue: Promise<void> = Promise.resolve();
 	private options: SyncEngineOptions;
+	private localState: LocalStateStore;
 
 	/** Tracks which paths we're currently writing to disk, to suppress watcher feedback */
 	private suppressedPaths: Set<string> = new Set();
@@ -39,6 +71,7 @@ export class SyncEngine extends EventEmitter {
 		this.store = store;
 		this.syncFolder = syncFolder;
 		this.options = options ?? {};
+		this.localState = new LocalStateStore(syncFolder);
 		if (options?.manifest) {
 			this.manifest = options.manifest;
 			this.ownsManifest = false;
@@ -53,12 +86,23 @@ export class SyncEngine extends EventEmitter {
 		this.fileStore = new FileStore(this.store);
 		await this.fileStore.ready();
 
+		await this.localState.load();
+
 		if (!this.manifest) {
 			this.manifest = ManifestStore.create(this.store, {
+				replicate: this.options.bootstrap !== undefined,
 				bootstrap: this.options.bootstrap,
 			});
 		}
 		await this.manifest.ready();
+
+		// Register peer name
+		const writerKey = this.manifest.writerKey;
+		const peerName = writerKey.slice(0, 8);
+		await this.manifest.put(
+			`__peer:${writerKey}`,
+			{ name: peerName } as unknown as ManifestValue,
+		);
 	}
 
 	async start(): Promise<void> {
@@ -66,14 +110,21 @@ export class SyncEngine extends EventEmitter {
 			throw new Error("SyncEngine not ready — call ready() first");
 		}
 
-		this.watcher = watch(this.drive, "/");
+		this.ensureFsWatchPatched();
+		this.watcher = watch(this.drive, "");
+		this.applyLocalwatchDestroyWorkaround(this.watcher);
 		this.watcher.on("data", (batch: { diff: { type: "update" | "delete"; key: string }[] }) => {
 			for (const diff of batch.diff) {
-				this.handleLocalChange(diff.type, diff.key).catch((err) =>
-					this.emit("error", err),
-				);
+				this.localChangeQueue = this.localChangeQueue.then(async () => {
+					try {
+						await this.handleLocalChange(diff.type, diff.key);
+					} catch (err) {
+						this.emit("error", err);
+					}
+				});
 			}
 		});
+		this.watcher.on("error", (err) => this.emit("error", err));
 
 		this.manifest.on("update", this._onRemoteUpdate);
 
@@ -81,7 +132,13 @@ export class SyncEngine extends EventEmitter {
 	}
 
 	private _onRemoteUpdate = () => {
-		this.handleRemoteChanges().catch((err) => this.emit("error", err));
+		this.remoteUpdateQueue = this.remoteUpdateQueue.then(async () => {
+			try {
+				await this.handleRemoteChanges();
+			} catch (err) {
+				this.emit("error", err);
+			}
+		});
 	};
 
 	async stop(): Promise<void> {
@@ -92,6 +149,8 @@ export class SyncEngine extends EventEmitter {
 		if (this.manifest) {
 			this.manifest.removeListener("update", this._onRemoteUpdate);
 		}
+		await this.localChangeQueue;
+		await this.remoteUpdateQueue;
 	}
 
 	async close(): Promise<void> {
@@ -110,7 +169,14 @@ export class SyncEngine extends EventEmitter {
 		}
 	}
 
+	async getPeerName(writerKey: string): Promise<string> {
+		const entry = await this.manifest!.get(`__peer:${writerKey}`);
+		if (entry && "name" in entry) return (entry as { name: string }).name;
+		return writerKey.slice(0, 8); // fallback
+	}
+
 	private async handleLocalChange(type: "update" | "delete", key: string): Promise<void> {
+		if (key.startsWith("/.pearsync/")) return;
 		if (this.suppressedPaths.has(key)) {
 			this.suppressedPaths.delete(key);
 			return;
@@ -128,8 +194,10 @@ export class SyncEngine extends EventEmitter {
 			const mtime = entry?.mtime ?? Date.now();
 
 			const hash = createHash("sha256").update(data).digest("hex");
-			const existing = await manifest.get(key);
-			if (existing && existing.hash === hash) return;
+			const manifestValue = await manifest.get(key);
+
+			// Skip if manifest already has this exact hash (and it's not a tombstone)
+			if (manifestValue && !isTombstone(manifestValue) && manifestValue.hash === hash) return;
 
 			const stored = await fileStore.writeFile(data);
 
@@ -142,15 +210,25 @@ export class SyncEngine extends EventEmitter {
 			};
 			await manifest.put(key, metadata);
 
+			// Update local state tracker
+			await this.localState.set(key, {
+				lastSyncedHash: hash,
+				lastSyncedMtime: mtime,
+				lastManifestHash: hash,
+				lastManifestWriterKey: metadata.writerKey,
+			});
+
 			this.emit("sync", {
 				direction: "local-to-remote",
 				type: "update",
 				path: key,
 			} satisfies SyncEvent);
 		} else if (type === "delete") {
-			const existing = await manifest.get(key);
-			if (existing) {
-				await manifest.remove(key);
+			const manifestValue = await manifest.get(key);
+			if (manifestValue && !isTombstone(manifestValue)) {
+				// Write tombstone instead of remove()
+				await manifest.putTombstone(key, fileStore.core.key.toString("hex"));
+				await this.localState.remove(key);
 				this.emit("sync", {
 					direction: "local-to-remote",
 					type: "delete",
@@ -161,25 +239,183 @@ export class SyncEngine extends EventEmitter {
 	}
 
 	private async handleRemoteChanges(): Promise<void> {
-		const manifest = this.manifest!;
-		const fileStore = this.fileStore!;
-		const drive = this.drive!;
-
-		const entries = await manifest.list();
+		const entries = await this.manifest!.list();
+		const myWriterKey = this.fileStore!.core.key.toString("hex");
 
 		for (const { path, metadata } of entries) {
-			if (metadata.writerKey === fileStore.core.key.toString("hex")) continue;
+			if (path.startsWith("__")) continue;
 
-			const localEntry = await drive.entry(path);
-			if (localEntry) {
-				const localData = await drive.get(path);
-				if (localData) {
-					const localHash = createHash("sha256").update(localData).digest("hex");
-					if (localHash === metadata.hash) continue;
-				}
+			if (isTombstone(metadata)) {
+				await this.handleRemoteDeletion(path, metadata);
+				continue;
 			}
 
-			const remoteCore = this.store.get({ key: Buffer.from(metadata.writerKey, "hex") });
+			// Skip our own writes
+			if (metadata.writerKey === myWriterKey) continue;
+
+			await this.handleRemoteUpdate(path, metadata);
+		}
+	}
+
+	private async handleRemoteUpdate(path: string, remote: FileMetadata): Promise<void> {
+		const tracked = this.localState.get(path);
+		const localData = await this.drive!.get(path);
+
+		// Case 1: File doesn't exist locally → just download
+		if (!localData) {
+			await this.downloadFile(path, remote);
+			this.emit("sync", {
+				direction: "remote-to-local",
+				type: "update",
+				path,
+			} satisfies SyncEvent);
+			return;
+		}
+
+		const localHash = createHash("sha256").update(localData).digest("hex");
+
+		// Case 2: Local file matches remote → already in sync
+		if (localHash === remote.hash) {
+			await this.localState.set(path, {
+				lastSyncedHash: localHash,
+				lastSyncedMtime: remote.mtime,
+				lastManifestHash: remote.hash,
+				lastManifestWriterKey: remote.writerKey,
+			});
+			return;
+		}
+
+		// Case 3: No tracking state → first sync, treat remote as authoritative
+		if (!tracked) {
+			await this.downloadFile(path, remote);
+			this.emit("sync", {
+				direction: "remote-to-local",
+				type: "update",
+				path,
+			} satisfies SyncEvent);
+			return;
+		}
+
+		// Case 4: Check if this is a new remote version
+		const remoteChanged = remote.hash !== tracked.lastManifestHash;
+		const localChanged = localHash !== tracked.lastSyncedHash;
+
+		if (remoteChanged && localChanged) {
+			// CONFLICT: both sides changed
+			await this.handleConflict(path, remote, localData);
+		} else if (remoteChanged) {
+			// Only remote changed → download
+			await this.downloadFile(path, remote);
+			this.emit("sync", {
+				direction: "remote-to-local",
+				type: "update",
+				path,
+			} satisfies SyncEvent);
+		}
+		// If only local changed (or neither), do nothing — local upload will handle it
+	}
+
+	private async handleConflict(
+		path: string,
+		remote: FileMetadata,
+		localData: Buffer,
+	): Promise<void> {
+		const localEntry = await this.drive!.entry(path);
+		const localMtime = localEntry?.mtime ?? 0;
+
+		// Winner = highest mtime. Tie-break: remote wins (it's already in the manifest).
+		const remoteWins = remote.mtime >= localMtime;
+
+		// Build conflict copy filename
+		const loserWriterKey = remoteWins
+			? this.fileStore!.core.key.toString("hex")
+			: remote.writerKey;
+		const peerName = await this.getPeerName(loserWriterKey);
+		const conflictPath = buildConflictPath(path, peerName);
+
+		if (remoteWins) {
+			// Save local version as conflict copy
+			this.suppressedPaths.add(conflictPath);
+			await this.drive!.put(conflictPath, localData);
+
+			// Download remote version to original path
+			await this.downloadFile(path, remote);
+		} else {
+			// Local wins — download remote version as conflict copy
+			const remoteData = await this.fetchRemoteFile(remote);
+			this.suppressedPaths.add(conflictPath);
+			await this.drive!.put(conflictPath, remoteData);
+
+			// Update state to reflect that we've seen this manifest version
+			await this.localState.set(path, {
+				lastSyncedHash: createHash("sha256").update(localData).digest("hex"),
+				lastSyncedMtime: localMtime,
+				lastManifestHash: remote.hash,
+				lastManifestWriterKey: remote.writerKey,
+			});
+		}
+
+		this.emit("sync", {
+			direction: "remote-to-local",
+			type: "conflict",
+			path,
+			conflictPath,
+		} satisfies SyncEvent);
+	}
+
+	private async handleRemoteDeletion(path: string, tombstone: TombstoneMetadata): Promise<void> {
+		const myWriterKey = this.fileStore!.core.key.toString("hex");
+
+		// Don't process our own tombstones
+		if (tombstone.writerKey === myWriterKey) return;
+
+		const tracked = this.localState.get(path);
+
+		// If we have no record of this file, it's either already gone or never existed locally
+		if (!tracked) return;
+
+		// Check if local file was modified since last sync
+		const localData = await this.drive!.get(path);
+		if (localData) {
+			const localHash = createHash("sha256").update(localData).digest("hex");
+			if (localHash !== tracked.lastSyncedHash) {
+				// Local was modified — edit wins over delete
+				return;
+			}
+		}
+
+		// Safe to delete: local file is unmodified since last sync
+		if (localData) {
+			this.suppressedPaths.add(path);
+			await this.drive!.del(path);
+		}
+		await this.localState.remove(path);
+
+		this.emit("sync", {
+			direction: "remote-to-local",
+			type: "delete",
+			path,
+		} satisfies SyncEvent);
+	}
+
+	private async downloadFile(path: string, metadata: FileMetadata): Promise<void> {
+		const data = await this.fetchRemoteFile(metadata);
+
+		this.suppressedPaths.add(path);
+		await this.drive!.put(path, data);
+
+		const hash = createHash("sha256").update(data).digest("hex");
+		await this.localState.set(path, {
+			lastSyncedHash: hash,
+			lastSyncedMtime: metadata.mtime,
+			lastManifestHash: metadata.hash,
+			lastManifestWriterKey: metadata.writerKey,
+		});
+	}
+
+	private async fetchRemoteFile(metadata: FileMetadata): Promise<Buffer> {
+		const remoteCore = this.store.get({ key: Buffer.from(metadata.writerKey, "hex") });
+		try {
 			await remoteCore.ready();
 
 			const blocks: Buffer[] = [];
@@ -191,16 +427,57 @@ export class SyncEngine extends EventEmitter {
 					);
 				blocks.push(block);
 			}
-			const fileData = Buffer.concat(blocks);
+			return Buffer.concat(blocks);
+		} finally {
+			await remoteCore.close();
+		}
+	}
 
-			this.suppressedPaths.add(path);
-			await drive.put(path, fileData);
+	private ensureFsWatchPatched(): void {
+		if (mutableFs.__pearsyncWatchPatched) return;
 
-			this.emit("sync", {
-				direction: "remote-to-local",
-				type: "update",
-				path,
-			} satisfies SyncEvent);
+		const originalWatch = mutableFs.watch.bind(mutableFs);
+		const patchedWatch = ((
+			filename: PathLike,
+			optionsOrListener?: WatchOptions | WatchListener<string>,
+			maybeListener?: WatchListener<string>,
+		): FSWatcher => {
+			let options: WatchOptions | undefined;
+			let listener: WatchListener<string> | undefined;
+
+			if (typeof optionsOrListener === "function") {
+				listener = optionsOrListener;
+			} else {
+				options = optionsOrListener;
+				listener = maybeListener;
+			}
+
+			const normalizedOptions = options?.recursive
+				? { ...options, recursive: false }
+				: options;
+			const watcher = (listener
+				? (originalWatch as any)(filename, normalizedOptions, listener)
+				: (originalWatch as any)(filename, normalizedOptions)) as FSWatcher;
+
+			// Node 25 can emit EMFILE from recursive watchers in long-running test workers.
+			// localwatch does not attach an error listener, so this would otherwise crash.
+			watcher.on("error", (err: NodeJS.ErrnoException) => {
+				if (err.code === "EMFILE") return;
+				throw err;
+			});
+			return watcher;
+		}) as typeof mutableFs.watch;
+
+		(mutableFs as any).watch = patchedWatch;
+		mutableFs.__pearsyncWatchPatched = true;
+	}
+
+	private applyLocalwatchDestroyWorkaround(stream: unknown): void {
+		// localwatch can throw on destroy() if the watched root never observed a visible entry.
+		// Pre-initialize the root entries map to avoid that null-stat teardown path.
+		const tree = (stream as { _tree?: { entries: Map<string, unknown> | null } })._tree;
+		if (tree && tree.entries === null) {
+			tree.entries = new Map();
 		}
 	}
 
@@ -210,12 +487,23 @@ export class SyncEngine extends EventEmitter {
 		const manifest = this.manifest!;
 
 		for await (const entry of drive.list("/")) {
+			if (entry.key.startsWith("/.pearsync/")) continue;
+
 			const data = await drive.get(entry.key);
 			if (!data) continue;
 
 			const hash = createHash("sha256").update(data).digest("hex");
 			const existing = await manifest.get(entry.key);
-			if (existing && existing.hash === hash) continue;
+			if (existing && !isTombstone(existing) && existing.hash === hash) {
+				// Already in sync — update local state tracker
+				await this.localState.set(entry.key, {
+					lastSyncedHash: hash,
+					lastSyncedMtime: entry.mtime,
+					lastManifestHash: existing.hash,
+					lastManifestWriterKey: existing.writerKey,
+				});
+				continue;
+			}
 
 			const stored = await fileStore.writeFile(data);
 			const metadata: FileMetadata = {
@@ -226,6 +514,13 @@ export class SyncEngine extends EventEmitter {
 				blocks: { offset: stored.offset, length: stored.length },
 			};
 			await manifest.put(entry.key, metadata);
+
+			await this.localState.set(entry.key, {
+				lastSyncedHash: hash,
+				lastSyncedMtime: entry.mtime,
+				lastManifestHash: hash,
+				lastManifestWriterKey: metadata.writerKey,
+			});
 
 			this.emit("sync", {
 				direction: "local-to-remote",
