@@ -1,5 +1,14 @@
 # PearSync — Development Guidelines
 
+## Reference Docs
+
+| Document | What it covers |
+|----------|---------------|
+| [`PLAN.md`](PLAN.md) | Architecture, data model, replication flow, testing phases, dependencies |
+| [`docs/authentication.md`](docs/authentication.md) | Auth model, pairing, Autobase consensus, membership, encryption, threat model |
+| [`prompts/layer1-hypercore-storage.md`](prompts/layer1-hypercore-storage.md) | Layer 1 spec: FileStore, chunking, Hypercore replication (done) |
+| [`prompts/layer2-autopass-manifest.md`](prompts/layer2-autopass-manifest.md) | Layer 2 spec: ManifestStore, Autopass CRUD, pairing, replication |
+
 ## After Every Change
 
 Always run these checks after modifying any code:

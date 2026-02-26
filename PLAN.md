@@ -67,6 +67,18 @@ Files are chunked (e.g. 64KB blocks) and appended sequentially. The manifest ent
 
 When a file is updated, the new version is appended (old blocks are not overwritten — append-only). GC can reclaim old blocks once all peers have the latest version.
 
+### Authentication & Consensus
+
+There are no accounts, passwords, or servers. See [`docs/authentication.md`](docs/authentication.md) for the full reference. Summary:
+
+- **Identity** = Ed25519 keypair, generated locally, stored in Corestore
+- **Pairing** = one-time invite code shared out-of-band (QR, paste, etc.)
+- **Membership** = replicated set maintained by Autobase consensus — any writer can add/remove writers, no hierarchy
+- **File data** = single-writer Hypercores (one per peer, read-only replicas for others)
+- **Manifest** = multi-writer via Autobase linearization → deterministic HyperDB view
+- **Encryption** = XSalsa20 at rest, Noise protocol in transit
+- **Replication** = all cores share one Corestore, replicated over Autopass's Hyperswarm
+
 ### Conflict Resolution
 
 - **No conflict**: Only one peer modified the file since last sync → fast-forward.
