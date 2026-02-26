@@ -8,6 +8,8 @@
 | [`docs/authentication.md`](docs/authentication.md) | Auth model, pairing, Autobase consensus, membership, encryption, threat model |
 | [`prompts/layer1-hypercore-storage.md`](prompts/layer1-hypercore-storage.md) | Layer 1 spec: FileStore, chunking, Hypercore replication (done) |
 | [`prompts/layer2-autopass-manifest.md`](prompts/layer2-autopass-manifest.md) | Layer 2 spec: ManifestStore, Autopass CRUD, pairing, replication |
+| [`prompts/layer3-local-replication.md`](prompts/layer3-local-replication.md) | Layer 3 spec: Integration tests for FileStore + ManifestStore replication |
+| [`prompts/layer4-folder-watcher.md`](prompts/layer4-folder-watcher.md) | Layer 4 spec: SyncEngine, folder watching, local↔remote file sync |
 
 ## After Every Change
 
